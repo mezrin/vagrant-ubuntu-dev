@@ -49,6 +49,55 @@ SHARED_RA_DROPIN="/etc/systemd/network/10-netplan-vagrant-shared.network.d/50-va
 BRIDGED_RA_DROPIN="/etc/systemd/network/10-netplan-vagrant-bridged.network.d/50-vagrant-ra-route-metric.conf"
 PRIVATE_NETWORK_PREFIX="${PRIVATE_NETWORK_CIDR#*/}"
 
+# Return the policy rules that are not Linux's standard per-family defaults.
+# VPN clients such as Happ/sing-box create advanced rules dynamically, and
+# networkd removes them whenever Netplan reconfigures a physical interface.
+# The priorities skipped here are reserved for the kernel's local, main, and
+# default lookups; VPN and administrator-owned rules must use other priorities.
+foreign_policy_rules() {
+  local family="$1"
+
+  ip -o "$family" rule show | awk -F: \
+    '$1 + 0 != 0 && $1 + 0 != 32766 && $1 + 0 != 32767'
+}
+
+snapshot_foreign_policy_rules() {
+  local family="$1"
+  local destination="$2"
+
+  foreign_policy_rules "$family" > "$destination"
+  chmod 0600 "$destination"
+}
+
+# Recreate rules from `ip -o rule show` without evaluating the text as shell
+# code. Delete each saved priority once before replaying it so repeated applies
+# cannot duplicate rules when a future networkd version preserves some of them.
+# Deleting by unique priority also correctly handles the several Happ rules that
+# intentionally share priorities 9002 and 9003.
+restore_foreign_policy_rules() {
+  local family="$1"
+  local source="$2"
+  local priority rule
+  local -a priorities rule_spec
+
+  mapfile -t priorities < <(
+    awk -F: '{ gsub(/[[:space:]]/, "", $1); print $1 }' "$source" | sort -nu
+  )
+  for priority in "${priorities[@]}"; do
+    while ip "$family" rule show priority "$priority" | grep --quiet .; do
+      ip "$family" rule del priority "$priority"
+    done
+  done
+
+  while IFS= read -r rule; do
+    [ -n "$rule" ] || continue
+    priority="${rule%%:*}"
+    priority="${priority//[[:space:]]/}"
+    read -r -a rule_spec <<< "${rule#*:}"
+    ip "$family" rule add priority "$priority" "${rule_spec[@]}"
+  done < "$source"
+}
+
 # Ignore loopback and software-only devices. Parallels NICs have a device entry
 # under sysfs; exactly three are required so adapter roles are unambiguous.
 mapfile -t PHYSICAL_INTERFACES < <(
@@ -176,15 +225,41 @@ NETWORKD_SNAPSHOT="$TRANSACTION_DIRECTORY/networkd"
 NETWORKMANAGER_SNAPSHOT="$TRANSACTION_DIRECTORY/networkmanager"
 UFW_SNAPSHOT="$TRANSACTION_DIRECTORY/ufw"
 UFW_STATE="$TRANSACTION_DIRECTORY/ufw-state"
+IPV4_POLICY_RULES="$TRANSACTION_DIRECTORY/ipv4-policy-rules"
+IPV6_POLICY_RULES="$TRANSACTION_DIRECTORY/ipv6-policy-rules"
 NETWORKMANAGER_UNMANAGED_CONFIG="/etc/NetworkManager/conf.d/90-vagrant-physical-interfaces-unmanaged.conf"
 SHARED_RA_DROPIN="/etc/systemd/network/10-netplan-vagrant-shared.network.d/50-vagrant-ra-route-metric.conf"
 BRIDGED_RA_DROPIN="/etc/systemd/network/10-netplan-vagrant-bridged.network.d/50-vagrant-ra-route-metric.conf"
 if [ ! -d "$NETPLAN_SNAPSHOT" ] || [ ! -d "$NETWORKD_SNAPSHOT" ] || \
    [ ! -d "$NETWORKMANAGER_SNAPSHOT" ] || [ ! -d "$UFW_SNAPSHOT" ] || \
-   [ ! -f "$UFW_STATE" ]; then
+   [ ! -f "$UFW_STATE" ] || [ ! -f "$IPV4_POLICY_RULES" ] || \
+   [ ! -f "$IPV6_POLICY_RULES" ]; then
   echo "Network rollback snapshot is incomplete." >&2
   exit 1
 fi
+
+restore_foreign_policy_rules() {
+  local family="$1"
+  local source="$2"
+  local priority rule
+  local -a priorities rule_spec
+
+  mapfile -t priorities < <(
+    awk -F: '{ gsub(/[[:space:]]/, "", $1); print $1 }' "$source" | sort -nu
+  )
+  for priority in "${priorities[@]}"; do
+    while ip "$family" rule show priority "$priority" | grep --quiet .; do
+      ip "$family" rule del priority "$priority"
+    done
+  done
+  while IFS= read -r rule; do
+    [ -n "$rule" ] || continue
+    priority="${rule%%:*}"
+    priority="${priority//[[:space:]]/}"
+    read -r -a rule_spec <<< "${rule#*:}"
+    ip "$family" rule add priority "$priority" "${rule_spec[@]}"
+  done < "$source"
+}
 
 # Restore the exact preceding YAML set and UFW configuration. Netplan is applied
 # before UFW so management routing exists when the prior firewall is reloaded.
@@ -227,6 +302,11 @@ cp -a -- "$UFW_SNAPSHOT/." /etc/ufw/
 
 netplan generate
 netplan apply
+# Netplan/networkd removes dynamically installed policy rules while reconciling
+# the physical NICs. Restore the rules that existed when this transaction began,
+# including any active VPN's strict-route and leak-prevention policy.
+restore_foreign_policy_rules -4 "$IPV4_POLICY_RULES"
+restore_foreign_policy_rules -6 "$IPV6_POLICY_RULES"
 if grep --quiet '^active$' "$UFW_STATE"; then
   ufw --force enable
   ufw reload
@@ -284,6 +364,11 @@ else
   printf 'inactive\n' > "$TRANSACTION_DIRECTORY/ufw-state"
 fi
 chmod 0600 "$TRANSACTION_DIRECTORY/ufw-state"
+
+# Capture dynamic policy routing before Netplan touches a physical interface.
+# Empty files are valid when no VPN or administrator rule is currently active.
+snapshot_foreign_policy_rules -4 "$TRANSACTION_DIRECTORY/ipv4-policy-rules"
+snapshot_foreign_policy_rules -6 "$TRANSACTION_DIRECTORY/ipv6-policy-rules"
 
 # Write rollback state atomically, then arm the out-of-band timer before the
 # first live Netplan/UFW mutation. The timer remains armed through firewall
@@ -417,6 +502,11 @@ done
 # connection before Bash can run its normal ERR trap.
 netplan generate
 netplan apply
+# Restore dynamic VPN/administrator policy rules immediately after the physical
+# adapters return. This uses kernel-rendered rule text as an argument array and
+# therefore preserves Happ's advanced selectors without evaluating shell code.
+restore_foreign_policy_rules -4 "$TRANSACTION_DIRECTORY/ipv4-policy-rules"
+restore_foreign_policy_rules -6 "$TRANSACTION_DIRECTORY/ipv6-policy-rules"
 
 # A network does not have to provide IPv6. If it does advertise an IPv6 default
 # route, however, it must have the same priority as that interface's IPv4 route.

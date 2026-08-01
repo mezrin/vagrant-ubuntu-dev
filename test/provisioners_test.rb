@@ -153,6 +153,13 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     refute_includes network, "ra-overrides:"
     assert_operator network.scan("[IPv6AcceptRA]").length, :>=, 2
     assert_includes network, "50-vagrant-ra-route-metric.conf"
+    assert_includes network, "snapshot_foreign_policy_rules"
+    assert_includes network, "restore_foreign_policy_rules"
+    assert_includes network, "ipv4-policy-rules"
+    assert_includes network, "ipv6-policy-rules"
+    assert_includes network, 'read -r -a rule_spec <<< "${rule#*:}"'
+    assert_includes network, 'ip "$family" rule add priority "$priority" "${rule_spec[@]}"'
+    refute_includes network, "eval "
     assert_includes network, "NETWORKD_SNAPSHOT"
     assert_includes network, "renderer: networkd"
     assert_includes network, "unmanaged-devices=mac:"

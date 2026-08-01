@@ -302,6 +302,15 @@ its desktop controls. A VPN client that requires NetworkManager itself to own
 the underlying Ethernet connection is not compatible with this split; use the
 client's standalone service/CLI or adapt the network backend deliberately.
 
+Immediately before Netplan reconciles the physical adapters, the network
+provisioner snapshots all non-built-in IPv4 and IPv6 policy rules. It restores
+them immediately after Netplan finishes and does the same during automatic
+rollback. This is necessary because Ubuntu 26.04's networkd reconfiguration
+removes Happ/sing-box's dynamically installed priority `9000` rules even when
+the TUN device and VPN processes remain healthy. The VPN client remains
+responsible for adding and removing those rules during normal connect and
+disconnect operations.
+
 Most VPN clients install a still-lower-priority default route, policy-routing
 rules, or both. That lets the VPN carry normal guest traffic while Vagrant's
 existing management connection remains on Shared/NAT and host SSH remains on
@@ -637,6 +646,12 @@ an offline or permanently available build. No local artifact mirror is provided.
   explicitly trusted tunnel interfaces, but route metrics cannot override every
   VPN kill switch or packet filter. A client using a different interface name
   must be added to `TRUSTED_VPN_TUNNEL_INTERFACES`.
+- **VPN policy-rule cleanup belongs to the VPN client.** Provisioning preserves
+  every non-built-in policy rule that existed when its network transaction
+  began. A crashed client may leave stale rules until the client reconnects,
+  the guest reboots, or an engineer removes them after inspection. Priorities
+  `0`, `32766`, and `32767` are reserved for Linux's built-in rules and are not
+  treated as application-owned; custom rules must not reuse those priorities.
 - **Development firewall policy.** The host-only port list is intentionally
   broad for development. It should be reduced for a less trusted host.
 - **MongoDB is not production-ready.** It has no TLS, backup, high availability,
@@ -697,6 +712,8 @@ list:
 
 ```sh
 ip -brief link
+ip -4 rule
+ip -6 rule
 sudo ufw status verbose
 sudo journalctl -k --since '5 minutes ago' | grep 'UFW BLOCK.*IN=.*tun'
 ```
@@ -708,6 +725,18 @@ network policy:
 ```sh
 vagrant provision dev-07 --provision-with network-security
 ```
+
+While Happ is connected, its default strict-route configuration also installs
+priority `9000` policy rules. If `tun0` exists but those rules are missing, an
+older provisioning run has already removed them; disconnect and reconnect Happ
+once. Future network provisioning snapshots and restores the active rules.
+
+Happ 3.3.6 currently gives this guest's `tun0` an IPv4 address only and installs
+an IPv6 `unreachable` rule while strict routing is enabled. Consequently,
+`curl -4 ifconfig.me` should succeed through the VPN and `curl -6 ifconfig.me`
+should fail instead of bypassing it. IPv6 can travel through the VPN only when
+the selected Happ profile and tunnel explicitly provide IPv6; the Vagrant
+network configuration cannot safely manufacture that capability.
 
 ### Network provisioning rolls back
 
