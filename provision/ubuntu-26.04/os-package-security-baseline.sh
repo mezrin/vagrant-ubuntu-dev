@@ -91,6 +91,10 @@ cat > /etc/apt/apt.conf.d/52-vagrant-unattended-upgrades <<'APT_CONFIG'
 Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+# Parallels exposes the Mac's battery state to the VM. The default value is
+# true, which makes unattended-upgrade return an error whenever a laptop host
+# is not connected to power and therefore breaks a noninteractive first boot.
+Unattended-Upgrade::OnlyOnACPower "false";
 APT_CONFIG
 
 # Apply available upgrades during provisioning. The EXIT trap restores normal

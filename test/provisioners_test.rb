@@ -192,6 +192,7 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
                     "systemctl is-enabled --quiet apt-daily.timer apt-daily-upgrade.timer"
     assert_includes apt,
                     "systemctl is-active --quiet apt-daily.timer apt-daily-upgrade.timer"
+    assert_includes apt, 'Unattended-Upgrade::OnlyOnACPower "false";'
 
     disk = provision_source("enlarge-hdd.sh")
     assert_includes disk, "root-vg-growth"
