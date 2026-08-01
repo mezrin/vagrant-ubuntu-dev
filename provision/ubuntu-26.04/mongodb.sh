@@ -544,7 +544,8 @@ fi
 MONGODB_READY=false
 for _attempt in $(seq 1 "$MONGODB_READY_ATTEMPTS"); do
   if docker exec "$MONGODB_CONTAINER" mongosh --quiet \
-    --eval 'quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)'; then
+    --eval 'quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)' \
+    > /dev/null 2>&1; then
     MONGODB_READY=true
     break
   fi
@@ -582,7 +583,8 @@ fi
 MONGODB_PRIMARY=false
 for _attempt in $(seq 1 "$MONGODB_READY_ATTEMPTS"); do
   if docker exec "$MONGODB_CONTAINER" mongosh --quiet \
-    --eval 'quit(db.hello().isWritablePrimary === true ? 0 : 1)'; then
+    --eval 'quit(db.hello().isWritablePrimary === true ? 0 : 1)' \
+    > /dev/null 2>&1; then
     MONGODB_PRIMARY=true
     break
   fi

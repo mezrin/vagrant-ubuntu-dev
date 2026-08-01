@@ -10,8 +10,8 @@ require "open3"
 require_relative "../lib/ubuntu_26_04_command_policy"
 
 class Ubuntu2604ProvisionersTest < Minitest::Test
-  # Derive paths from this test file so the suite works from either repository
-  # root or the vagrant directory.
+  # Derive paths from this test file so the suite works regardless of the
+  # caller's current directory.
   VAGRANT_DIRECTORY = File.expand_path("..", __dir__)
   VAGRANTFILE = File.join(VAGRANT_DIRECTORY, "Vagrantfile")
   PROVISION_DIRECTORY = File.join(VAGRANT_DIRECTORY, "provision", "ubuntu-26.04")
@@ -120,6 +120,27 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
       ["provision"],
       mongodb_enabled: false
     )
+  end
+
+  # A protected, ignored local file makes the standard `vagrant up` command
+  # self-contained. The environment remains an explicit automation override,
+  # and the credential value must never be committed into the template.
+  def test_mongodb_host_secret_policy
+    source = File.read(VAGRANTFILE)
+    gitignore = File.read(File.join(VAGRANT_DIRECTORY, ".gitignore"))
+
+    assert_includes gitignore, "/.secrets/"
+    assert_includes source,
+                    'MONGODB_PASSWORD_DIRECTORY = File.expand_path(".secrets", __dir__)'
+    assert_includes source,
+                    'MONGODB_PASSWORD_FILE = File.join(MONGODB_PASSWORD_DIRECTORY, "mongodb-password")'
+    assert_includes source,
+                    "MONGODB_PASSWORD_FROM_ENVIRONMENT = ENV.key?(MONGODB_PASSWORD_ENVIRONMENT_VARIABLE)"
+    assert_includes source, "!File.symlink?(MONGODB_PASSWORD_FILE)"
+    assert_includes source, "File.stat(MONGODB_PASSWORD_DIRECTORY).mode & 0o077"
+    assert_includes source, "File.stat(MONGODB_PASSWORD_FILE).mode & 0o077"
+    assert_includes source, "config.vagrant.sensitive = [MONGODB_PASSWORD]"
+    refute_match(/MONGODB_PASSWORD\s*=\s*["'][^"']+["']/, source)
   end
 
   # Guard the critical network/firewall behavior as a coherent policy: explicit
@@ -242,6 +263,7 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes mongodb, 'MONGODB_SECRET_SNAPSHOT'
     assert_includes mongodb, 'chown "root:$MONGODB_GID" "$MONGODB_SECRET_TEMP"'
     assert_includes mongodb, 'chmod 0440 "$MONGODB_SECRET_TEMP"'
+    assert_operator mongodb.scan("> /dev/null 2>&1; then").length, :>=, 2
     refute_match(/\bcat\(/, mongodb)
     assert_equal 7, mongodb.scan("fs.readFileSync").length
     assert_match(/docker container rm "\$MONGODB_ROLLBACK_CONTAINER".*?trap - EXIT/m,

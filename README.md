@@ -17,7 +17,7 @@ Docker, Rust, Python, Node.js, PostgreSQL, MongoDB, Nginx, and Certbot.
 | Storage | A full clone with a 1000G fixed-size (`plain`) virtual disk |
 | Host access | Static host-only address `192.168.56.7` |
 | Guest internet | Bridged Wi-Fi is preferred; Parallels Shared/NAT is fallback |
-| Host files | `vagrant/synced_folder` is mounted at `/home/vagrant/synced_folder` |
+| Host files | `synced_folder` is mounted at `/home/vagrant/synced_folder` |
 | Toolchains | Pinned Rust, Node.js, Corepack, uv, and Python versions |
 | Databases | Local PostgreSQL and authenticated, single-node MongoDB |
 | Web server | Static Nginx site; optional Let's Encrypt certificates |
@@ -66,29 +66,29 @@ The ping should receive no response before this guest is started. A response
 usually means another guest or device already owns the configured address. No
 response is not proof that the address is free because a device may block ICMP.
 
-## Host environment variables
+## Host inputs
 
-These variables are read on the Mac while Vagrant evaluates the template:
+The Vagrantfile reads these host-side inputs before it creates or changes the
+guest:
 
-| Variable | Required | Meaning |
+| Input | Required | Meaning |
 | --- | --- | --- |
-| `VAGRANT_VAGRANTFILE` | For every command | Selects `Vagrantfile` instead of a file literally named `Vagrantfile` |
-| `MONGODB_PASSWORD` | Commands that can run the MongoDB provisioner | Supplies the MongoDB administrative password; keep the original value for an existing database |
+| `.secrets/mongodb-password` | Normally | Protected local MongoDB administrative password used automatically by `vagrant up` and reprovisioning |
+| `MONGODB_PASSWORD` | Optional override | Overrides the local password file for automation or an explicit credential operation |
 | `VAGRANT_BRIDGED_INTERFACE` | Only when Wi-Fi is not `en0` | Selects the Mac interface used by Adapter 3 |
 
 The Vagrantfile passes selected values to guest provisioners as environment
-variables. Do not set guest script variables manually during normal use; edit
-the `Config` section and let Vagrant provide a validated, consistent set.
+variables. Do not set guest script variables manually during normal use. The
+password file is ignored by Git and must be readable only by its owner. An
+explicit `MONGODB_PASSWORD` environment variable takes precedence over it.
 
 ## First launch
 
-Run all Vagrant commands from this `vagrant` directory. Because the template
-does not use the default filename `Vagrantfile`, select it through an environment
-variable for the current shell:
+Run every Vagrant command from this repository directory. `Vagrantfile` uses the
+default filename, so no selector environment variable is needed:
 
 ```sh
-cd /path/to/repository/vagrant
-export VAGRANT_VAGRANTFILE=Vagrantfile
+cd /path/to/dev-07
 ```
 
 Install the exact provider plugin expected by the template:
@@ -106,27 +106,36 @@ vagrant box add bento/ubuntu-26.04 \
   --box-version 202606.01.0
 ```
 
-MongoDB provisioning requires a non-empty password. On the default macOS zsh,
-the following reads it without placing the value in shell history or displaying
-it on screen:
+MongoDB provisioning requires a non-empty password. This one-time setup reads it
+without placing the value in shell history or displaying it, writes it without a
+trailing newline, and restricts it to your macOS account:
 
 ```sh
 read -s "MONGODB_PASSWORD?MongoDB password: "
-export MONGODB_PASSWORD
 printf '\n'
+mkdir -p .secrets
+chmod 700 .secrets
+printf '%s' "$MONGODB_PASSWORD" > .secrets/mongodb-password
+chmod 600 .secrets/mongodb-password
+unset MONGODB_PASSWORD
 ```
 
-Keep this password in a password manager. Use the same value whenever this VM
-is validated or reprovisioned. Vagrant marks it as sensitive to reduce log
-exposure, but it is still a process environment variable and should not be
-treated as a production secret-management mechanism.
+Keep the same value in a password manager. The local file makes later lifecycle
+commands noninteractive, and Vagrant masks the value in provisioner output. It
+is still a plaintext development credential on the host and inside a root-owned
+guest file; this is not a production secret-management mechanism.
 
-Run the fast syntax/policy tests, validate the configuration, and launch the VM:
+The complete launch is one command:
+
+```sh
+vagrant up --provider=parallels
+```
+
+For a template change, run the fast checks before launching:
 
 ```sh
 ruby test/provisioners_test.rb
 vagrant validate
-vagrant up --provider=parallels
 ```
 
 The first run can take a long time. It creates a full clone, allocates the fixed
@@ -165,9 +174,8 @@ by the conditional reboot check. If Ubuntu already has
 
 ## Normal VM lifecycle
 
-Keep `VAGRANT_VAGRANTFILE` set in the shell for every command. Keep
-`MONGODB_PASSWORD` set for a full provisioning run or one that selects
-`mongodb` or the generic `shell` provisioner type.
+Run these commands from the repository directory. When the protected local
+password file exists, no password environment variable or prompt is needed.
 
 ```sh
 # Show the Vagrant state.
@@ -182,7 +190,7 @@ vagrant provision
 # Re-run one named provisioner.
 vagrant provision --provision-with mongodb
 
-# This targeted run does not require MONGODB_PASSWORD.
+# This targeted run does not read the MongoDB password.
 vagrant provision --provision-with nginx
 
 # Restart and provision, including a conditional Ubuntu reboot if required.
@@ -195,9 +203,10 @@ vagrant resume
 ```
 
 `vagrant validate`, `vagrant up --no-provision`, `vagrant halt`, `vagrant
-status`, and `vagrant destroy` do not need the MongoDB password. A normal
+status`, and `vagrant destroy` do not read the MongoDB password. A normal
 `vagrant up`, an unfiltered `vagrant provision`, and `vagrant reload --provision`
-do. With `--provision-with`, the password is required only for `mongodb` or
+read it from `.secrets/mongodb-password` unless `MONGODB_PASSWORD` is explicitly
+set. With `--provision-with`, the password is required only for `mongodb` or
 `shell`; targeting `nginx`, `postgresql`, or another independent provisioner
 does not require it.
 
@@ -255,7 +264,7 @@ set mode `0600` before using GitHub over SSH.
 
 ### Shared files
 
-The host directory `vagrant/synced_folder` is created automatically and mounted
+The host directory `synced_folder` is created automatically and mounted
 inside the guest at:
 
 ```text
@@ -394,11 +403,12 @@ that change before restoring the old container. Changing the replica-set name,
 converting to multiple members, or migrating to a different volume remains a
 manual backup/restore operation.
 
-Password rotation is deliberately not automatic. If `MONGODB_PASSWORD` differs
-from the stored value, provisioning stops before changing the container. Rotate
-the database credential and the root-readable guest secret as one controlled
-operation, or rebuild the disposable development database. Simply changing the
-host environment variable is not a rotation procedure.
+Password rotation is deliberately not automatic. If the local password file or
+the `MONGODB_PASSWORD` override differs from the stored guest value,
+provisioning stops before changing the container. Rotate the database credential,
+the local file, and the root-readable guest secret as one controlled operation,
+or rebuild the disposable development database. Simply changing a host input is
+not a rotation procedure.
 
 This MongoDB setup is for development only: it has one replica-set member, one
 high-privilege application credential, no TLS on the host-only link, no backup
@@ -714,8 +724,9 @@ or signature verification merely to make provisioning continue.
 ## File map
 
 ```text
-vagrant/
-├── Vagrantfile          VM definition, validation, and orchestration
+dev-07/
+├── .secrets/                         Ignored, owner-only local credentials
+├── Vagrantfile                       VM definition, validation, and orchestration
 ├── README.md                         This operator and design guide
 ├── lib/ubuntu_26_04_command_policy.rb Testable host command/secret policy
 ├── provision/ubuntu-26.04/*.sh       One executable script per provisioning task

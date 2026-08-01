@@ -4,5 +4,8 @@
 # Per-checkout Vagrant state, including machine IDs and SSH keys
 /.vagrant/
 
+# Local credentials consumed by the Vagrantfile. Never commit this directory.
+/.secrets/
+
 # Auto-created host/guest shared workspace
 /synced_folder/

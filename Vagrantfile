@@ -8,14 +8,8 @@
 # fixed-size 1000G disk, network exposure, MongoDB password handling, service
 # access, lifecycle commands, design decisions, and known limitations.
 #
-# Quick start from this directory (the password must remain in the same shell):
+# Quick start from this directory after the one-time host setup in README.md:
 #
-#   export VAGRANT_VAGRANTFILE=Vagrantfile
-#   read -s "MONGODB_PASSWORD?MongoDB password: "
-#   export MONGODB_PASSWORD
-#   printf '\n'
-#   ruby test/provisioners_test.rb
-#   vagrant validate
 #   vagrant up --provider=parallels
 #
 # This file is Ruby code evaluated on the host. It validates all configuration,
@@ -229,7 +223,28 @@ Vagrant.configure("2") do |config|
   MONGODB_USERNAME = "vagrant"
   MONGODB_AUTH_DATABASE = "admin"
   MONGODB_PASSWORD_ENVIRONMENT_VARIABLE = "MONGODB_PASSWORD"
-  MONGODB_PASSWORD = ENV.fetch(MONGODB_PASSWORD_ENVIRONMENT_VARIABLE, "")
+  # Keep the development password outside Git while allowing the normal launch
+  # to remain a single command. An explicitly set environment variable wins,
+  # which is useful for automation and deliberate credential changes. The local
+  # file may have one conventional trailing line ending; embedded line endings
+  # are rejected by validation below.
+  MONGODB_PASSWORD_DIRECTORY = File.expand_path(".secrets", __dir__)
+  MONGODB_PASSWORD_FILE = File.join(MONGODB_PASSWORD_DIRECTORY, "mongodb-password")
+  MONGODB_PASSWORD_FROM_ENVIRONMENT = ENV.key?(MONGODB_PASSWORD_ENVIRONMENT_VARIABLE)
+  MONGODB_PASSWORD_FILE_PRESENT = File.exist?(MONGODB_PASSWORD_FILE) ||
+    File.symlink?(MONGODB_PASSWORD_FILE)
+  MONGODB_PASSWORD_FILE_USABLE = File.file?(MONGODB_PASSWORD_FILE) &&
+    !File.symlink?(MONGODB_PASSWORD_FILE)
+  mongodb_password_from_file = if MONGODB_PASSWORD_FILE_USABLE
+    File.binread(MONGODB_PASSWORD_FILE).sub(/\r?\n\z/, "")
+  else
+    ""
+  end
+  MONGODB_PASSWORD = if MONGODB_PASSWORD_FROM_ENVIRONMENT
+    ENV.fetch(MONGODB_PASSWORD_ENVIRONMENT_VARIABLE)
+  else
+    mongodb_password_from_file
+  end
   MONGODB_SECRETS_DIRECTORY = "/etc/mongodb-secrets"
   MONGODB_CONFIG_VERSION = "authenticated-private-v1"
   MONGODB_MANAGED_LABEL = "dev.vagrant.mongodb-managed"
@@ -524,6 +539,19 @@ Vagrant.configure("2") do |config|
                        MONGODB_HEALTH_START_PERIOD]
   validate.call(mongodb_durations.all? { |duration| duration.match?(/\A[1-9]\d*[smh]\z/) },
                 "MongoDB health durations must be positive s, m, or h values")
+  if !MONGODB_PASSWORD_FROM_ENVIRONMENT && MONGODB_PASSWORD_FILE_PRESENT
+    validate.call(File.directory?(MONGODB_PASSWORD_DIRECTORY) &&
+                  !File.symlink?(MONGODB_PASSWORD_DIRECTORY),
+                  "MONGODB_PASSWORD_DIRECTORY must be a directory, not a symbolic link")
+    validate.call(MONGODB_PASSWORD_FILE_USABLE,
+                  "MONGODB_PASSWORD_FILE must be a regular file, not a symbolic link")
+    if MONGODB_PASSWORD_FILE_USABLE
+      validate.call((File.stat(MONGODB_PASSWORD_DIRECTORY).mode & 0o077).zero?,
+                    "MONGODB_PASSWORD_DIRECTORY must not be accessible by group or other users")
+      validate.call((File.stat(MONGODB_PASSWORD_FILE).mode & 0o077).zero?,
+                    "MONGODB_PASSWORD_FILE must not be accessible by group or other users")
+    end
+  end
   validate.call(!MONGODB_PASSWORD.match?(/[\0\r\n]/),
                 "MONGODB_PASSWORD must not contain NUL or newline characters")
 
@@ -536,7 +564,7 @@ Vagrant.configure("2") do |config|
   )
   if mongodb_secret_required
     validate.call(!MONGODB_PASSWORD.empty?,
-                  "set #{MONGODB_PASSWORD_ENVIRONMENT_VARIABLE} before provisioning MongoDB")
+                  "create #{MONGODB_PASSWORD_FILE} or set #{MONGODB_PASSWORD_ENVIRONMENT_VARIABLE} before provisioning MongoDB")
   end
 
   # Fail before assigning any Vagrant objects that could install a plugin,
