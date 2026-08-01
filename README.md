@@ -2,7 +2,7 @@
 
 This directory contains a Vagrant template for a large, reproducible Ubuntu
 26.04 development workstation running on Parallels Desktop for Mac. The main
-file is `Vagrantfile-ubuntu-26.04`.
+file is `Vagrantfile`.
 
 The template is intended for an Apple Silicon Mac and a trusted development
 environment. It installs a graphical Ubuntu desktop, common build tools,
@@ -72,7 +72,7 @@ These variables are read on the Mac while Vagrant evaluates the template:
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `VAGRANT_VAGRANTFILE` | For every command | Selects `Vagrantfile-ubuntu-26.04` instead of a file literally named `Vagrantfile` |
+| `VAGRANT_VAGRANTFILE` | For every command | Selects `Vagrantfile` instead of a file literally named `Vagrantfile` |
 | `MONGODB_PASSWORD` | Commands that can run the MongoDB provisioner | Supplies the MongoDB administrative password; keep the original value for an existing database |
 | `VAGRANT_BRIDGED_INTERFACE` | Only when Wi-Fi is not `en0` | Selects the Mac interface used by Adapter 3 |
 
@@ -88,7 +88,7 @@ variable for the current shell:
 
 ```sh
 cd /path/to/repository/vagrant
-export VAGRANT_VAGRANTFILE=Vagrantfile-ubuntu-26.04
+export VAGRANT_VAGRANTFILE=Vagrantfile
 ```
 
 Install the exact provider plugin expected by the template:
@@ -495,7 +495,7 @@ configuration.
 ## Configuration reference
 
 Edit values only in the `Config` section near the beginning of
-`Vagrantfile-ubuntu-26.04`.
+`Vagrantfile`.
 
 | Setting group | What it controls |
 | --- | --- |
@@ -711,7 +711,7 @@ or signature verification merely to make provisioning continue.
 
 ```text
 vagrant/
-├── Vagrantfile-ubuntu-26.04          VM definition, validation, and orchestration
+├── Vagrantfile          VM definition, validation, and orchestration
 ├── README.md                         This operator and design guide
 ├── lib/ubuntu_26_04_command_policy.rb Testable host command/secret policy
 ├── provision/ubuntu-26.04/*.sh       One executable script per provisioning task

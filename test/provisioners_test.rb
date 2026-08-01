@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Fast safety and policy tests for Vagrantfile-ubuntu-26.04, its extracted Bash
+# Fast safety and policy tests for Vagrantfile, its extracted Bash
 # provisioners, and the opt-in guest integration test. These tests do not start a
 # VM or contact external repositories; the guest script exercises live behavior
 # separately after an engineer explicitly selects it.
@@ -13,7 +13,7 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
   # Derive paths from this test file so the suite works from either repository
   # root or the vagrant directory.
   VAGRANT_DIRECTORY = File.expand_path("..", __dir__)
-  VAGRANTFILE = File.join(VAGRANT_DIRECTORY, "Vagrantfile-ubuntu-26.04")
+  VAGRANTFILE = File.join(VAGRANT_DIRECTORY, "Vagrantfile")
   PROVISION_DIRECTORY = File.join(VAGRANT_DIRECTORY, "provision", "ubuntu-26.04")
   GUEST_INTEGRATION_SCRIPT = File.join(VAGRANT_DIRECTORY, "test", "guest_integration.sh")
   EXPECTED_SCRIPTS = %w[

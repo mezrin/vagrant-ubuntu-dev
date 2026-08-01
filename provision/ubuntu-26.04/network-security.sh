@@ -347,12 +347,12 @@ install -m 0600 "$NETPLAN_CANDIDATE" "$NETPLAN_CONFIG"
 SHARED_RA_CANDIDATE="$TRANSACTION_DIRECTORY/shared-ra-route-metric.conf"
 BRIDGED_RA_CANDIDATE="$TRANSACTION_DIRECTORY/bridged-ra-route-metric.conf"
 cat > "$SHARED_RA_CANDIDATE" <<NETWORKD
-# Managed by Vagrantfile-ubuntu-26.04; manual edits are overwritten.
+# Managed by Vagrantfile; manual edits are overwritten.
 [IPv6AcceptRA]
 RouteMetric=$SHARED_ROUTE_METRIC
 NETWORKD
 cat > "$BRIDGED_RA_CANDIDATE" <<NETWORKD
-# Managed by Vagrantfile-ubuntu-26.04; manual edits are overwritten.
+# Managed by Vagrantfile; manual edits are overwritten.
 [IPv6AcceptRA]
 RouteMetric=$BRIDGED_ROUTE_METRIC
 NETWORKD
@@ -367,7 +367,7 @@ install -m 0644 "$BRIDGED_RA_CANDIDATE" "$BRIDGED_RA_DROPIN"
 # adapters, while leaving NetworkManager available for VPN and tunnel devices.
 NETWORKMANAGER_CANDIDATE="$TRANSACTION_DIRECTORY/networkmanager-unmanaged.conf"
 cat > "$NETWORKMANAGER_CANDIDATE" <<NETWORKMANAGER
-# Managed by Vagrantfile-ubuntu-26.04; manual edits are overwritten.
+# Managed by Vagrantfile; manual edits are overwritten.
 [keyfile]
 unmanaged-devices=mac:$SHARED_MAC;mac:$PRIVATE_MAC;mac:$BRIDGED_MAC
 NETWORKMANAGER

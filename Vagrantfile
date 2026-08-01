@@ -10,7 +10,7 @@
 #
 # Quick start from this directory (the password must remain in the same shell):
 #
-#   export VAGRANT_VAGRANTFILE=Vagrantfile-ubuntu-26.04
+#   export VAGRANT_VAGRANTFILE=Vagrantfile
 #   read -s "MONGODB_PASSWORD?MongoDB password: "
 #   export MONGODB_PASSWORD
 #   printf '\n'
