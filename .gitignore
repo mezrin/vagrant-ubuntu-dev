@@ -1,2 +1,8 @@
-**/.DS_Store
+# macOS Finder metadata
+.DS_Store
 
+# Per-checkout Vagrant state, including machine IDs and SSH keys
+/.vagrant/
+
+# Auto-created host/guest shared workspace
+/synced_folder/
