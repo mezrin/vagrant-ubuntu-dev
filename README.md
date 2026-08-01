@@ -17,6 +17,7 @@ Docker, Rust, Python, Node.js, PostgreSQL, MongoDB, Nginx, and Certbot.
 | Storage | A full clone with a 1000G fixed-size (`plain`) virtual disk |
 | Host access | Static host-only address `192.168.56.7` |
 | Guest internet | Bridged Wi-Fi is preferred; Parallels Shared/NAT is fallback |
+| Guest VPNs | UFW trusts decrypted return traffic on configured tunnel devices |
 | Host files | `synced_folder` is mounted at `/home/vagrant/synced_folder` |
 | Toolchains | Pinned Rust, Node.js, Corepack, uv, and Python versions |
 | Databases | Local PostgreSQL and authenticated, single-node MongoDB |
@@ -318,17 +319,20 @@ If provisioning fails or SSH is lost, the helper restores the immediately
 preceding state. Successful transactions and snapshots are removed rather than
 being reused on later runs.
 
-Only UFW rules carrying a `Vagrant managed:` comment are reconciled. Untagged
-rules remain administrator-owned even when they are broader than the template's
-policy; provisioning reports the effective rules but does not delete them.
+Only UFW rules carrying a `Vagrant managed:` comment are reconciled. This
+includes the physical-interface rules and the explicit VPN tunnel trust list.
+Untagged rules remain administrator-owned even when they are broader than the
+template's policy; provisioning reports the effective rules but does not delete
+them.
 
 The UFW firewall denies incoming traffic by default:
 
-| Source/interface | Allowed TCP traffic |
+| Source/interface | Allowed incoming traffic |
 | --- | --- |
 | Shared/NAT | SSH (`22`) only |
 | Host-only `192.168.56.0/24` | The configured development ports listed below |
 | Bridged Wi-Fi | Nothing, unless Nginx bridged ingress is enabled |
+| Configured local VPN tunnels | IPv4 and IPv6 traffic returned by the VPN |
 
 Host-only TCP ports are grouped by intended use:
 
@@ -356,6 +360,22 @@ kill switch can also block host-only or Shared/NAT traffic. Enable the client's
 **allow LAN/local network** option, or exclude both `192.168.56.0/24` and the
 current Parallels Shared subnet, if Vagrant SSH or VS Code disconnects while the
 VPN is active.
+
+Linux treats packets written back through a TUN device as inbound traffic. UFW
+therefore needs an allow rule for each trusted tunnel device or it will discard
+decrypted replies even while the VPN route, DNS, and server connection are all
+healthy. `TRUSTED_VPN_TUNNEL_INTERFACES` defaults to `tun0`, which is the device
+created by Happ 3.3.6 with its default Linux TUN configuration. The rule accepts
+IPv4 and IPv6 on that software interface only; it does not open Shared/NAT,
+Host-only, or Bridged Wi-Fi.
+
+If another VPN client creates a different device, add its exact Linux interface
+name to `TRUSTED_VPN_TUNNEL_INTERFACES` and run the `network-security`
+provisioner. Names are explicit instead of wildcarded so an unrelated software
+interface is not trusted accidentally. Creating a TUN device requires elevated
+network privileges, so software capable of impersonating a trusted name could
+already alter routes or firewall rules; install VPN clients only from sources
+you trust.
 
 The exact Shared subnet is assigned by Parallels and is intentionally not fixed
 in this template.
@@ -513,7 +533,7 @@ Edit values only in the `Config` section near the beginning of
 | --- | --- |
 | `VM_NAME`, `PROVIDER_VM_NAME` | Stable Vagrant, Parallels, hostname, and MongoDB identity |
 | `DEFAULT_USER`, `GIT_*`, `GITHUB_*` | Guest user-level development preferences |
-| `PRIVATE_NETWORK_*`, route metrics, port list | Static host access, route priority, and firewall policy |
+| `PRIVATE_NETWORK_*`, route metrics, port and VPN tunnel lists | Static host access, route priority, and firewall policy |
 | `PROVISION_*` | Whether each optional feature is provisioned |
 | `NGINX_*`, `CERTBOT_*` | Static site names, bridged exposure, and certificates |
 | `*_VERSION`, `*_URL`, `*_SHA256` | Reproducible external software inputs |
@@ -613,8 +633,10 @@ an offline or permanently available build. No local artifact mirror is provided.
   change the template instead.
 - **Bridged address uses DHCP.** The host-only address is stable, but the LAN
   address may change as Wi-Fi networks or DHCP leases change.
-- **VPN behavior is client-specific.** Route metrics cannot override every VPN
-  kill switch or packet filter.
+- **VPN behavior is client-specific.** The template permits returned traffic on
+  explicitly trusted tunnel interfaces, but route metrics cannot override every
+  VPN kill switch or packet filter. A client using a different interface name
+  must be added to `TRUSTED_VPN_TUNNEL_INTERFACES`.
 - **Development firewall policy.** The host-only port list is intentionally
   broad for development. It should be reduced for a less trusted host.
 - **MongoDB is not production-ready.** It has no TLS, backup, high availability,
@@ -666,6 +688,25 @@ inspect routes and firewall state:
 ip -brief address
 ip -4 route
 sudo ufw status verbose
+```
+
+### A VPN connects but the guest loses internet access
+
+Confirm the VPN-created device name and compare it with the configured trust
+list:
+
+```sh
+ip -brief link
+sudo ufw status verbose
+sudo journalctl -k --since '5 minutes ago' | grep 'UFW BLOCK.*IN=.*tun'
+```
+
+Happ's default device is `tun0`. If the client uses another name, add that name
+to `TRUSTED_VPN_TUNNEL_INTERFACES` in `Vagrantfile`, then reconcile only the
+network policy:
+
+```sh
+vagrant provision dev-07 --provision-with network-security
 ```
 
 ### Network provisioning rolls back

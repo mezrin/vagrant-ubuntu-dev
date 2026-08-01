@@ -4,8 +4,9 @@ set -Eeuo pipefail
 # Purpose: declaratively reconcile the guest's three NICs, IPv4/IPv6 route
 # priority, and interface-scoped UFW rules. Runs as root on every Vagrant
 # up/reload.
-# Inputs: private address/CIDR, route metrics, Nginx exposure flag, and allowed
-# host-only TCP ports. See README.md for the full traffic model.
+# Inputs: private address/CIDR, route metrics, Nginx exposure flag, allowed
+# host-only TCP ports, and trusted VPN tunnel interface names. See README.md for
+# the full traffic model.
 # Safety model: identify adapters from live facts, take a per-run snapshot of
 # Netplan and UFW, schedule an automatic rollback, apply, then cancel rollback
 # only after address, route, and firewall checks pass. Manual Netplan and
@@ -19,6 +20,22 @@ set -Eeuo pipefail
 : "${SHARED_ROUTE_METRIC:?}"
 : "${NGINX_BRIDGED_INGRESS:?}"
 : "${PRIVATE_NETWORK_TCP_PORTS:?}"
+: "${TRUSTED_VPN_TUNNEL_INTERFACES:?}"
+
+# Linux interface names are at most 15 characters. Validate the explicit trust
+# list before taking a snapshot or mutating live network state; spaces separate
+# names and therefore cannot be part of an interface name.
+read -r -a VPN_TUNNEL_INTERFACES <<< "$TRUSTED_VPN_TUNNEL_INTERFACES"
+if [ "${#VPN_TUNNEL_INTERFACES[@]}" -eq 0 ]; then
+  echo "At least one trusted VPN tunnel interface is required." >&2
+  exit 1
+fi
+for VPN_INTERFACE in "${VPN_TUNNEL_INTERFACES[@]}"; do
+  if [[ ! "$VPN_INTERFACE" =~ ^[[:alnum:]][[:alnum:]_.-]{0,14}$ ]]; then
+    echo "Invalid trusted VPN tunnel interface: $VPN_INTERFACE" >&2
+    exit 1
+  fi
+done
 
 # The managed file is the only Netplan YAML source left after a successful run.
 # Each attempt gets an exact, short-lived snapshot of the immediately preceding
@@ -474,6 +491,17 @@ for PORT in "${PRIVATE_PORTS[@]}"; do
     to any port "$PORT" proto tcp comment 'Vagrant managed: private development'
 done
 
+# A full-tunnel client reads packets from a TUN device and writes decrypted
+# replies back through that same device. The kernel treats those replies as
+# inbound packets; with UFW's default-deny policy they are dropped even though
+# the VPN route and remote connection are healthy. Trust every protocol on only
+# the explicitly configured local tunnel devices. This does not open Shared,
+# Host-only, or Bridged ingress, and the rules are valid before a device exists.
+for VPN_INTERFACE in "${VPN_TUNNEL_INTERFACES[@]}"; do
+  ufw allow in on "$VPN_INTERFACE" \
+    comment 'Vagrant managed: trusted VPN tunnel'
+done
+
 # Bridged traffic is closed by default. Enabling Nginx ingress adds only HTTP and
 # HTTPS; it does not expose SSH, MongoDB, or arbitrary development ports.
 if [ "$NGINX_BRIDGED_INGRESS" = true ]; then
@@ -491,7 +519,8 @@ UFW_STATUS="$(ufw status verbose)"
 printf '%s\n' "$UFW_STATUS"
 if ! grep --quiet '^Status: active$' <<< "$UFW_STATUS" || \
    ! grep --quiet 'Vagrant managed: Shared SSH' <<< "$UFW_STATUS" || \
-   ! grep --quiet 'Vagrant managed: private development' <<< "$UFW_STATUS"; then
+   ! grep --quiet 'Vagrant managed: private development' <<< "$UFW_STATUS" || \
+   ! grep --quiet 'Vagrant managed: trusted VPN tunnel' <<< "$UFW_STATUS"; then
   echo "UFW did not report the required template-owned rules." >&2
   exit 1
 fi

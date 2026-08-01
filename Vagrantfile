@@ -106,6 +106,10 @@ Vagrant.configure("2") do |config|
     "15100:15105", "15200:15205", "15300:15305", "15400:15405",
     "18890:18894", "27017"
   ].freeze
+  # UFW otherwise treats decrypted packets that a local VPN injects through a
+  # TUN device as unsolicited inbound traffic. Trust only explicitly named
+  # tunnel interfaces; Happ uses tun0 with its default Linux configuration.
+  TRUSTED_VPN_TUNNEL_INTERFACES = ["tun0"].freeze
 
   # Optional feature switches. The baseline packages, network reconciliation,
   # disk growth, and the post-provision reboot check are always configured.
@@ -368,6 +372,13 @@ Vagrant.configure("2") do |config|
                 "PRIVATE_NETWORK_TCP_PORTS contains overlapping entries")
   validate.call(private_ports.include?(22),
                 "PRIVATE_NETWORK_TCP_PORTS must permit host-only SSH")
+  linux_interface_name = /\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}\z/
+  validate.call(!TRUSTED_VPN_TUNNEL_INTERFACES.empty? &&
+                TRUSTED_VPN_TUNNEL_INTERFACES.uniq == TRUSTED_VPN_TUNNEL_INTERFACES &&
+                TRUSTED_VPN_TUNNEL_INTERFACES.all? { |interface|
+                  interface.is_a?(String) && interface.match?(linux_interface_name)
+                },
+                "TRUSTED_VPN_TUNNEL_INTERFACES must contain unique Linux interface names")
 
   # Cross-check feature dependencies and externally visible service ports.
   if PROVISION_NGINX
@@ -675,7 +686,8 @@ Vagrant.configure("2") do |config|
                         "BRIDGED_ROUTE_METRIC" => BRIDGED_NETWORK_ROUTE_METRIC.to_s,
                         "SHARED_ROUTE_METRIC" => SHARED_NETWORK_ROUTE_METRIC.to_s,
                         "NGINX_BRIDGED_INGRESS" => NGINX_BRIDGED_INGRESS.to_s,
-                        "PRIVATE_NETWORK_TCP_PORTS" => PRIVATE_NETWORK_TCP_PORTS.join(" ")
+                        "PRIVATE_NETWORK_TCP_PORTS" => PRIVATE_NETWORK_TCP_PORTS.join(" "),
+                        "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" ")
                       }
 
   # Consume host-side disk growth inside the guest. Running on every normal up
@@ -886,6 +898,7 @@ Vagrant.configure("2") do |config|
                         "PRIVATE_NETWORK_CIDR" => PRIVATE_NETWORK_CIDR,
                         "BRIDGED_ROUTE_METRIC" => BRIDGED_NETWORK_ROUTE_METRIC.to_s,
                         "SHARED_ROUTE_METRIC" => SHARED_NETWORK_ROUTE_METRIC.to_s,
+                        "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" "),
                         "DOCKER_ENABLED" => PROVISION_DOCKER.to_s,
                         "POSTGRESQL_ENABLED" => PROVISION_POSTGRESQL.to_s,
                         "MONGODB_ENABLED" => PROVISION_MONGODB.to_s,

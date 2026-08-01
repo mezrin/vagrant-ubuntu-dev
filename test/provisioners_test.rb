@@ -165,6 +165,9 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes network, "trap rollback_on_exit EXIT"
     assert_includes network, "state established '( sport = :22 )'"
     assert_includes network, 'marker="pid=$CURRENT_PID,"'
+    assert_includes network, "TRUSTED_VPN_TUNNEL_INTERFACES"
+    assert_includes network, "Vagrant managed: trusted VPN tunnel"
+    assert_includes network, 'ufw allow in on "$VPN_INTERFACE"'
     refute_includes network, "delete allow 'Nginx Full'"
 
     docker = provision_source("docker.sh")

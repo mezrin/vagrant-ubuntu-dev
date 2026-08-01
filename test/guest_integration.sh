@@ -8,7 +8,8 @@ set -Eeuo pipefail
 
 for VARIABLE in \
   PRIVATE_NETWORK_IP PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC \
-  SHARED_ROUTE_METRIC DOCKER_ENABLED POSTGRESQL_ENABLED MONGODB_ENABLED \
+  SHARED_ROUTE_METRIC TRUSTED_VPN_TUNNEL_INTERFACES \
+  DOCKER_ENABLED POSTGRESQL_ENABLED MONGODB_ENABLED \
   NGINX_ENABLED POSTGRESQL_MAJOR_VERSION POSTGRESQL_PACKAGE_VERSION \
   MONGODB_CONTAINER MONGODB_IMAGE MONGODB_VOLUME MONGODB_PORT MONGODB_MANAGED_LABEL \
   MONGODB_SECRETS_DIRECTORY NGINX_PROBE_SERVER_NAME \
@@ -104,7 +105,15 @@ UFW_STATUS="$(ufw status verbose)"
 grep --quiet '^Status: active$' <<< "$UFW_STATUS"
 grep --quiet 'Vagrant managed: Shared SSH' <<< "$UFW_STATUS"
 grep --quiet 'Vagrant managed: private development' <<< "$UFW_STATUS"
-pass "UFW is active with template-owned rules"
+grep --quiet 'Vagrant managed: trusted VPN tunnel' <<< "$UFW_STATUS"
+read -r -a VPN_TUNNEL_INTERFACES <<< "$TRUSTED_VPN_TUNNEL_INTERFACES"
+for VPN_INTERFACE in "${VPN_TUNNEL_INTERFACES[@]}"; do
+  iptables --wait --check ufw-user-input \
+    --in-interface "$VPN_INTERFACE" --jump ACCEPT
+  ip6tables --wait --check ufw6-user-input \
+    --in-interface "$VPN_INTERFACE" --jump ACCEPT
+done
+pass "UFW is active with physical-ingress and VPN-return policy"
 
 # Provisioning must leave Ubuntu's automatic maintenance services restored.
 systemctl is-active --quiet apt-daily.timer
