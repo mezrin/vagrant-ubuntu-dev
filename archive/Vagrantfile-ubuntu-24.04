@@ -1,0 +1,542 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+
+# Links
+#
+# https://docs.vagrantup.com
+# https://vagrantcloud.com/search
+
+
+Vagrant.configure("2") do |config|
+
+  #
+  # Config
+  #
+
+  VM_NAME = "trevo-07"
+
+  TIMESTAMP = ::Time.now.strftime("%Y-%m-%d_%H-%M-%S")
+  PROVIDER_VM_NAME = VM_NAME + "_" + TIMESTAMP
+  # PROVIDER_VM_NAME = VM_NAME
+
+  DEFAULT_USER = "vagrant"
+
+  ### MacOS
+  VAGRANT_PLUGINS = ["vagrant-parallels", "vagrant-reload"]
+  ### Windows
+  # VAGRANT_PLUGINS = ["vagrant-reload"]
+
+  ### MacOS - Apple Silicon
+  BASE_BOX = "bento/ubuntu-24.04"
+  BASE_BOX_VERSION = "202502.21.0"
+  ### MacOS - Intel
+  # BASE_BOX = "generic/ubuntu2204"
+  # BASE_BOX_VERSION = "4.3.12"
+  ### Windows
+  # BASE_BOX = "generic/ubuntu2204"
+  # BASE_BOX_VERSION = "4.3.12"
+
+  RESOURCES_HDD_SIZE = "1000GB"
+  RESOURCES_CPUS = 8
+  RESOURCES_MEMORY = 50000
+
+  #
+  # Init VM
+  #
+
+  # Install required plugins
+  config.vagrant.plugins = VAGRANT_PLUGINS
+
+  # Set name of VM and host
+  config.vm.define VM_NAME
+  config.vm.hostname = VM_NAME
+
+  # Set Base box
+  config.vm.box = BASE_BOX
+  config.vm.box_version = BASE_BOX_VERSION
+
+  # Disable automatic box update checking
+  config.vm.box_check_update = false
+
+  # Set disk size
+  # https://developer.hashicorp.com/vagrant/docs/disks/usage
+  # https://developer.hashicorp.com/vagrant/docs/disks/hyperv/usage
+  config.vm.disk :disk, size: RESOURCES_HDD_SIZE, primary: true
+
+  # Set a shared folder between host and guest
+  # For some reason doesn't work in Windows
+  config.vm.synced_folder "./synced_folder", "/home/vagrant/synced_folder", create: true
+
+
+  # Configure Parallels VM
+  #
+  # https://parallels.github.io/vagrant-parallels/docs/
+  # https://parallels.github.io/vagrant-parallels/docs/configuration.html
+  #
+  config.vm.provider "parallels" do |prl|
+
+    # Set full clone to be able to remove snapshots and then increase the size of HDD
+    prl.linked_clone = false
+
+    # Set the name of Virtual machine
+    prl.name = PROVIDER_VM_NAME
+
+    # Update Parallels Tools installed on Guest automatically
+    prl.update_guest_tools = true
+
+    # Change hardware specs
+    prl.cpus = RESOURCES_CPUS
+    prl.memory = RESOURCES_MEMORY
+
+    # Delete snapshots to be able to increase size of HDD
+    #
+    # Id of the snapshot to be deleted is "8738059e-8076-47d5-b027-0c02ee9e004c".
+    # If the ID changes in the future or you change the base box,
+    # then use the following commands to figure out the new id of the snapshot:
+    # > prlctl list
+    # > prlctl snapshot-list <VM name>
+    #
+    # prl.customize "post-import", ["snapshot-delete",
+    #                               :id, 
+    #                               "--id", "8738059e-8076-47d5-b027-0c02ee9e004c"]
+
+    # Increase the size of attached HDD
+    prl.customize "post-import", ["set",
+                                  :id, 
+                                  "--device-set", "hdd0", 
+                                  "--size", "1000G", 
+                                  "--type=plain", "--no-fs-resize"]
+  end
+
+
+  # Configure Hyper-V VM
+  config.vm.provider "hyperv" do |hv|
+    hv.vmname = PROVIDER_VM_NAME
+    hv.cpus = RESOURCES_CPUS
+    hv.maxmemory = RESOURCES_MEMORY
+    hv.ip_address_timeout = 360
+    hv.enable_virtualization_extensions = true
+    hv.enable_enhanced_session_mode = true
+  end
+
+
+  #
+  # Enlarge disk
+  #
+  config.vm.provision "enlarge-hdd", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Enlarge HDD\n###\n"
+
+    echo "###"
+    echo "### Increase Partition"
+    sudo growpart /dev/sda 3
+
+    # If the command above doesn't work, then try to use the following:
+    # > sudo parted /dev/sda resizepart 3 268G
+
+    echo "###"
+    echo "### Increase Physical volume"
+    sudo pvresize /dev/sda3
+
+    echo "###"
+    echo "### Increase Logical volume"
+    sudo lvextend --resizef --extents +100%FREE /dev/mapper/ubuntu--vg-ubuntu--lv
+  SHELL
+
+  # Instruction to enlarge the disk manually
+  #
+  # MacOS
+  # 1) Change the disk size in `prl.customize` above to the needed value, remove `"post-import",`
+  # 2) boot the machine up
+  # 3) follow the guide: https://forum.cloudron.io/topic/6086/ubuntu-20-04-how-to-extend-partition-for-noobs/2
+  # 4) revert changes in vagrant file - return `"post-import",` back
+  #
+  # Windows
+  # 1) Disable all provisions and create VM. Disk will be enlarged
+  # 2) Turn of the VM. Using Hyper-V Manager - convert disk to fixed size.
+  # 3) Run all provisions manually  
+
+  # Reboot
+  config.vm.provision :reload
+
+
+  #
+  # Update the system
+  #
+  # ATTENTION: For M1 boxes you need to disable this provision
+  #
+  # config.vm.provision "system-update", type: "shell", inline: <<-SHELL
+  #   echo "\n\n###\n### Update the system and reboot\n###\n"
+  #   sudo apt update
+  #   sudo apt upgrade --assume-yes
+  # SHELL
+
+  # Reboot
+  # config.vm.provision :reload
+
+
+  #
+  # General dev packages
+  #
+  config.vm.provision "general-dev-packages", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install basic dev packages\n###\n"
+    sudo apt install --assume-yes build-essential gcc cmake clang libssl-dev protobuf-compiler
+    sudo apt install --assume-yes git colordiff curl
+  SHELL
+
+  config.vm.provision "general-dev-packages-non-privileged", type: "shell", privileged: false, inline: <<-SHELL
+    echo "\n\n###\n### Setup git\n###\n"
+
+    # Set username
+    git config --global user.email "victor.mezrin@trevo.finance"
+    git config --global user.name "Victor Mezrin"
+
+    # Set editor for merges
+    # Nano
+    # git config --global core.editor "nano"
+    # VSCode
+    git config --global core.editor "code --wait"
+    # Cursor
+    # git config --global core.editor "cursor --wait"
+    # TODO: open Cursor, press "Cmd+Shit+P", type "Install 'cursor' command", reload cursor
+
+    # Remove remote branches that were deleted on remote server
+    git config --global fetch.prune true
+
+    echo "\n\n###\n### Add GitHub RSA key to SSH config.\n"
+
+    echo "https://docs.github.com/authentication/connecting-to-github-with-ssh\n"
+
+    # Adding a record about the key file to SSH config
+    echo "\n\nHost github.com\n    IdentityFile ~/.ssh/my-ssh-key" >> ~/.ssh/config
+
+    echo "\n\n###\n### Add GutHub PGP keys\n###\n"
+    echo "https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key\n"
+    echo "https://docs.github.com/en/authentication/managing-commit-signature-verification/adding-a-gpg-key-to-your-github-account\n"
+  SHELL
+
+
+  #
+  # Install Docker
+  # https://docs.docker.com/engine/install/ubuntu/
+  #
+  config.vm.provision "docker", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install Docker\n###\n"
+
+    sudo apt install --assume-yes ca-certificates curl gnupg lsb-release
+
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+         sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+    echo \
+         "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+         https://download.docker.com/linux/ubuntu \
+         $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    sudo apt update
+
+    sudo apt install --assume-yes docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+    if [ $(getent group docker) ]; then
+      echo "group 'docker' exists."
+    else
+      sudo groupadd docker
+    fi
+
+    sudo usermod -aG docker $USER
+
+    sudo echo '
+    { 
+      \"log-driver\": \"local\",
+      \"log-opts\": {
+        \"mode\": \"non-blocking\",
+        \"max-buffer-size\": \"10m\"
+      }
+    }
+    ' > /etc/docker/daemon.json
+
+    sudo systemctl restart docker
+
+    sudo docker run hello-world
+  SHELL
+
+
+  #
+  # Rust toolchain for Substrate
+  # https://docs.substrate.io/install/linux/
+  #
+  config.vm.provision "rust-for-substrate-deps", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install basic packages\n###\n"
+    sudo apt install --assume-yes build-essential git clang curl libssl-dev protobuf-compiler 
+  SHELL
+
+  config.vm.provision "rust-for-substrate", type: "shell", privileged: false, inline: <<-SHELL
+    echo "\n\n###\n### Launch rustup\n###\n"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+    echo "\n\n###\n### Update shell to include Cargo\n###\n"
+    source $HOME/.cargo/env
+
+    echo "\n\n###\n### Verify installation\n###\n"
+    rustc --version
+
+    echo "\n\n###\n### Add cargo to PATH variables\n###\n"
+    echo -e "\n\n" >> ~/.profile
+    echo "# Add Rust & cargo to path variable" >> ~/.profile
+    echo "export PATH=\$PATH:\$HOME/.cargo/bin" >> ~/.profile
+    echo -e "\n" >> ~/.profile
+
+    echo "\n\n###\n### Configure the Rust toolchain\n###\n"
+    rustup default stable
+    rustup update
+
+    echo "\n\n###\n### Add the nightly release and WebAssembly (wasm) targets\n###\n"
+    rustup update nightly
+    rustup target add wasm32-unknown-unknown --toolchain nightly
+
+    echo "\n\n###\n### Verify the configuration\n###\n"
+    rustup show
+    rustup +nightly show
+  SHELL
+
+
+  #
+  # Python toolchain
+  #
+  config.vm.provision "python", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install python \n###\n"
+
+    sudo apt install software-properties-common --yes
+
+    sudo add-apt-repository ppa:deadsnakes/ppa --yes
+    sudo apt update
+
+    sudo apt install --assume-yes python3.12-full python3.12-dev
+    python3.12 -m ensurepip --default-pip
+    python3.12 -m pip install --upgrade pip
+
+    sudo apt install --assume-yes python3.13-full python3.13-dev
+    python3.13 -m ensurepip --default-pip
+    python3.13 -m pip install --upgrade pip
+
+    # Require venv environments for python packages
+    # Prevent installing python packages into user's home directory
+    # If you ever must bypass the guard: "PIP_REQUIRE_VIRTUALENV=0 python3 -m pip install --user somepkg"
+    echo '' >> ~/.bashrc
+    echo '# Require venv environments for python packages' >> ~/.bashrc
+    echo '# Prevent installing python packages into user's home directory' >> ~/.bashrc
+    echo 'export PIP_REQUIRE_VIRTUALENV=1' >> ~/.bashrc
+  SHELL
+
+
+  #
+  # Python data science
+  #
+  # config.vm.provision "python-data-science", type: "shell", inline: <<-SHELL
+  #   echo "\n\n###\n### Install python packages for data science\n###\n"
+  #   python3.12 -m pip install notebook
+  # SHELL
+
+
+  #
+  # NodeJS
+  # https://www.digitalocean.com/community/tutorials/how-to-install-node-js-on-ubuntu-22-04
+  # https://nodejs.org/en/about/previous-releases
+  #
+  config.vm.provision "nodejs", type: "shell", privileged: false, inline: <<-SHELL
+    echo "\n\n###\n### Install NodeJS 22\n###\n"
+
+    echo "\n\n###\n### Install NVM:\n###\n"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+
+    source ~/.bashrc
+
+    export NVM_DIR="$HOME/.nvm"
+    # This loads nvm
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    # This loads nvm bash_completion
+    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+
+    nvm install v22
+
+    echo "\n\n###\n### Install corepack for yarn:\n###\n"
+    npm install -g corepack
+
+    echo "\n\n###\n### Check installation of NodeJS:\n###\n"
+    node -v
+  SHELL
+
+
+  #
+  # PostgreSQL
+  # https://www.postgresql.org/download/linux/ubuntu/
+  #
+  config.vm.provision "postgresql", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install PostgreSQL\n###\n"
+
+    echo "\n\n###\n### Create the file repository configuration:\n###\n"
+    sudo sh -c 'echo "###\n### deb http://apt.postgresql.org/pub/repos/apt \
+         $(lsb_release -cs)-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list'
+
+    echo "\n\n###\n### Import the repository signing key:\n###\n"
+    wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+
+    echo "\n\n###\n### Update the package lists:\n###\n"
+    sudo apt update
+
+    echo "\n\n###\n### Install the latest version of PostgreSQL\n###\n"
+    sudo apt --assume-yes install postgresql
+  SHELL
+
+
+  #
+  # MongoDB
+  # https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-ubuntu/
+  #
+  config.vm.provision "mongodb", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install MongoDB 7.0\n###\n"
+
+    sudo apt install --assume-yes gnupg curl
+
+    curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
+         sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg \
+         --dearmor
+
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | \
+         sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+
+    sudo apt update
+
+    sudo apt-get install -y mongodb-org
+
+    echo "\n\n###\n### Start MongoDB\n###\n"
+    sudo systemctl start mongod
+
+    echo "\n\n###\n### Make MongoDB autostart\n###\n"
+    sudo systemctl enable mongod
+
+    echo "\n\n###\n### Check MongoDB status:\n###\n"
+    sudo systemctl status mongod
+
+    echo "\n\n###\n### Open MongoDB to external connections\n###\n"
+    # https://www.cherryservers.com/blog/install-mongodb-ubuntu-22-04
+
+    echo "\n\n### Make Mongo to listen 0.0.0.0 instead of 127.0.0.1\n"
+    sudo sed -i -e 's/bindIp: 127.0.0.1/bindIp: 0.0.0.0/g' /etc/mongod.conf
+
+    echo "\n\n### Restart MongoDB\n"
+    sudo systemctl restart mongod
+
+    # Open firewall
+    # sudo ufw allow 27017/tcp
+    # sudo ufw reload
+
+    echo "\n\n###\n### Setup cluster consisting of 1 node\n###\n"
+    # https://www.mongodb.com/docs/manual/tutorial/convert-standalone-to-replica-set/
+
+    echo "\n\n### Add lines related to replication\n"
+    sudo sed -i -e 's/#replication:/#replication:\\nreplication:\\n  replSetName: rs0/g' /etc/mongod.conf
+
+    echo "\n\n### Restart MongoDB\n"
+    sudo systemctl restart mongod
+    sleep 2s
+
+    echo "\n\n### Initialize the replica set\n"
+    sudo mongosh --eval "rs.initiate()"
+    sudo mongosh --eval "rs.conf()"
+    sudo mongosh --eval "rs.status()"
+  SHELL
+
+
+  #
+  # Nginx + letsencrypt
+  # https://www.digitalocean.com/community/tutorials/how-to-secure-nginx-with-let-s-encrypt-on-ubuntu-22-04
+  #
+  config.vm.provision "nginx", type: "shell", inline: <<-SHELL
+    echo "\n\n###\n### Install Nginx\n###\n"
+
+    sudo apt update
+    sudo apt install nginx
+
+    sudo snap install core; sudo snap refresh core
+    sudo snap install --classic certbot
+    sudo ln -s /snap/bin/certbot /usr/bin/certbot
+
+    sudo ufw allow 'Nginx Full'
+
+    echo "\n\n###\n### Setup sites and obtain SSL certificates manually\n###\n"
+    echo "\n- setup DNS records\n"
+    echo "\n- create site' records in nginx config\n"
+    echo "\n- run certbot to obtain SSL certificate\n"
+  SHELL
+
+
+
+  #
+  # Set networking
+  #
+
+  # Stable host-only IP, for vagrant / VSCode / etc.
+  config.vm.network "private_network", ip: "192.168.56.10"
+
+  # Bridged adapter for outgoing internet
+  config.vm.network "public_network"
+
+
+
+  # Set forwarded ports
+  # This allows to call apps in guest machine from the host machine
+
+  # Substrate
+  config.vm.network "forwarded_port", guest: 9944, host: 9944
+
+  config.vm.network "forwarded_port", guest: 15100, host: 15100
+  config.vm.network "forwarded_port", guest: 15101, host: 15101
+  config.vm.network "forwarded_port", guest: 15102, host: 15102
+  config.vm.network "forwarded_port", guest: 15103, host: 15103
+  config.vm.network "forwarded_port", guest: 15104, host: 15104
+  config.vm.network "forwarded_port", guest: 15105, host: 15105
+
+  config.vm.network "forwarded_port", guest: 15200, host: 15200
+  config.vm.network "forwarded_port", guest: 15201, host: 15201
+  config.vm.network "forwarded_port", guest: 15202, host: 15202
+  config.vm.network "forwarded_port", guest: 15203, host: 15203
+  config.vm.network "forwarded_port", guest: 15204, host: 15204
+  config.vm.network "forwarded_port", guest: 15205, host: 15205
+
+  config.vm.network "forwarded_port", guest: 15300, host: 15300
+  config.vm.network "forwarded_port", guest: 15301, host: 15301
+  config.vm.network "forwarded_port", guest: 15302, host: 15302
+  config.vm.network "forwarded_port", guest: 15303, host: 15303
+  config.vm.network "forwarded_port", guest: 15304, host: 15304
+  config.vm.network "forwarded_port", guest: 15305, host: 15305
+
+  config.vm.network "forwarded_port", guest: 15400, host: 15400
+  config.vm.network "forwarded_port", guest: 15401, host: 15401
+  config.vm.network "forwarded_port", guest: 15402, host: 15402
+  config.vm.network "forwarded_port", guest: 15403, host: 15403
+  config.vm.network "forwarded_port", guest: 15404, host: 15404
+  config.vm.network "forwarded_port", guest: 15405, host: 15405
+
+  # PolkadotJS
+  config.vm.network "forwarded_port", guest: 3000, host: 3000
+
+  # Web-services like FastAPI
+  config.vm.network "forwarded_port", guest: 18890, host: 18890
+  config.vm.network "forwarded_port", guest: 18891, host: 18891
+  config.vm.network "forwarded_port", guest: 18892, host: 18892
+  config.vm.network "forwarded_port", guest: 18893, host: 18893
+  config.vm.network "forwarded_port", guest: 18894, host: 18894
+
+  # MongoDB
+  config.vm.network "forwarded_port", guest: 27017, host: 27017
+
+
+  #
+  # Reboot
+  #
+  config.vm.provision :reload
+
+end
