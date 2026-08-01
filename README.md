@@ -204,8 +204,10 @@ does not require it.
 The conditional reboot is an action hook around Vagrant's provisioning phase,
 not a selectable provisioner. It checks `/run/reboot-required` after every
 successful full or targeted provisioning run, including
-`--provision-with nginx`, and asks Vagrant to perform one provider-aware reboot
-when needed. It never runs for `--no-provision`.
+`--provision-with nginx`, and asks Vagrant to perform one provider reload when
+needed. The reload starts the new kernel, waits for Parallels Tools, and remounts
+the shared folders. Provisioning is explicitly disabled during this nested
+reload to prevent recursion. The hook never runs for `--no-provision`.
 
 ### Destroying the VM
 
@@ -544,9 +546,11 @@ Provisioners execute in this order:
 | `integration-test` | root, only when explicitly selected | Run read-only checks against the fully provisioned guest |
 
 After the listed provisioners finish, a host-side Vagrant action hook checks
-`/run/reboot-required` and performs at most one provider-aware reboot. Because it
-wraps the provisioning action itself, it is not filtered out by
-`--provision-with`.
+`/run/reboot-required` and performs at most one Parallels-aware reload. This is a
+full provider lifecycle operation rather than a guest-only reboot, so Parallels
+Tools can remount `/vagrant` and `/home/vagrant/synced_folder` after a kernel
+update. Because the hook wraps the provisioning action itself, it is not
+filtered out by `--provision-with`.
 
 The scripts use `set -Eeuo pipefail`, validate required environment inputs, and
 are written to tolerate repeated provisioning. They avoid interactive package

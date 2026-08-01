@@ -254,6 +254,9 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes source,
                     "hook.before(Vagrant::Action::Builtin::Provision, Middleware)"
     assert_includes source, "return if env[:provision_enabled] == false"
+    assert_includes source,
+                    "machine.action(:reload, provision_enabled: false)"
+    refute_includes source, "machine.guest.capability(:reboot)"
     refute_match(/config\.vm\.provision "conditional-reboot"/, source)
   end
 

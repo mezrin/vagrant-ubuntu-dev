@@ -36,8 +36,10 @@ Vagrant.require_version ">= 2.4.0"
 # Ubuntu package operations can leave /run/reboot-required behind. This local
 # middleware wraps Vagrant's complete provisioning action, so it also runs after
 # `--provision-with` selections that omit a final named provisioner. It asks
-# Vagrant to perform one provider-aware reboot only after successful provisioning
-# and does nothing for --no-provision operations.
+# Vagrant to perform one provider reload only after successful provisioning and
+# does nothing for --no-provision operations. A complete reload is important for
+# Parallels: after Ubuntu boots a newly installed kernel, the provider must wait
+# for Parallels Tools and remount the shared folders.
 module VagrantPlugins
   module ConditionalReboot
     class Middleware
@@ -51,8 +53,12 @@ module VagrantPlugins
 
         machine = env.fetch(:machine)
         if machine.communicate.test("test -f /run/reboot-required")
-          machine.ui.info("Guest reboot required; rebooting once after provisioning.")
-          machine.guest.capability(:reboot)
+          machine.ui.info(
+            "Guest reboot required; reloading once through Parallels after provisioning."
+          )
+          # Disable provisioning on this nested action. Otherwise reload would
+          # recursively run the provisioners and this hook again.
+          machine.action(:reload, provision_enabled: false)
         else
           machine.ui.info("Guest reboot is not required.")
         end
