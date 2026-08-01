@@ -159,10 +159,18 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
   # Assert ordering and state mechanisms that make repeat provisioning safe.
   def test_reconciliation_and_service_lifecycle_invariants
     apt = provision_source("os-package-security-baseline.sh")
+    assert_includes apt, "export NEEDRESTART_MODE=l"
+    refute_includes apt, "export NEEDRESTART_MODE=a"
     assert_operator apt.index("trap restore_automatic_updates EXIT"), :<,
                     apt.index("systemctl stop apt-daily.timer")
     assert_match(/systemctl unmask apt-daily\.service apt-daily-upgrade\.service.*?systemctl daemon-reload.*?systemctl enable --now apt-daily\.timer/m,
                  apt)
+    assert_match(/for update_unit in.*?systemctl reset-failed "\$update_unit".*?\|\| true/m,
+                 apt)
+    assert_includes apt,
+                    "systemctl is-enabled --quiet apt-daily.timer apt-daily-upgrade.timer"
+    assert_includes apt,
+                    "systemctl is-active --quiet apt-daily.timer apt-daily-upgrade.timer"
 
     disk = provision_source("enlarge-hdd.sh")
     assert_includes disk, "root-vg-growth"

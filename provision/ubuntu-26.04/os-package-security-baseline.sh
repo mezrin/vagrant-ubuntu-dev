@@ -14,7 +14,10 @@ set -Eeuo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-export NEEDRESTART_MODE=a
+# Automatic needrestart mode can restart ssh.service or the active network
+# backend inside this Vagrant SSH session. List affected services instead; the
+# post-provision hook performs one provider-aware reboot when Ubuntu requests it.
+export NEEDRESTART_MODE=l
 
 read -r -a PACKAGES <<< "$OS_APT_PACKAGES"
 
@@ -34,12 +37,25 @@ restore_automatic_updates() {
   # themselves are static and are started later by their timers.
   if systemctl unmask apt-daily.service apt-daily-upgrade.service \
        apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service &&
-     systemctl daemon-reload &&
-     systemctl reset-failed apt-daily.service apt-daily-upgrade.service \
-       apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service &&
-     systemctl enable --now apt-daily.timer apt-daily-upgrade.timer \
-       unattended-upgrades.service; then
-    exit "$original_status"
+     systemctl daemon-reload; then
+    # reset-failed reports an error for a valid static unit that systemd has not
+    # loaded into memory yet. Clear known failures when possible, but let the
+    # strict enable/start and postcondition checks below decide restoration.
+    local update_unit
+    for update_unit in \
+      apt-daily.service apt-daily-upgrade.service \
+      apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service; do
+      systemctl reset-failed "$update_unit" > /dev/null 2>&1 || true
+    done
+
+    if systemctl enable --now apt-daily.timer apt-daily-upgrade.timer \
+         unattended-upgrades.service &&
+       systemctl is-enabled --quiet apt-daily.timer apt-daily-upgrade.timer \
+         unattended-upgrades.service &&
+       systemctl is-active --quiet apt-daily.timer apt-daily-upgrade.timer \
+         unattended-upgrades.service; then
+      exit "$original_status"
+    fi
   fi
 
   echo "Failed to restore automatic Ubuntu update services." >&2
