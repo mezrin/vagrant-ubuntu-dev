@@ -268,7 +268,7 @@ Vagrant.configure("2") do |config|
   # capacity on the host. The storage workflow can grow but never shrink a disk.
   PARALLELS_RESOURCES_HDD_SIZE = "1000G"
   RESOURCES_CPUS = 8
-  RESOURCES_MEMORY = 20000
+  RESOURCES_MEMORY = 50000
 
   # Keep provisioner logic outside this Ruby file so shell syntax can be tested
   # independently. This inventory must match every referenced executable script.
