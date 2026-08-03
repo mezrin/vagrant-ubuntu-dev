@@ -9,6 +9,7 @@ set -Eeuo pipefail
 for VARIABLE in \
   PRIVATE_NETWORK_IP PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC \
   SHARED_ROUTE_METRIC TRUSTED_VPN_TUNNEL_INTERFACES \
+  INOTIFY_MAX_USER_WATCHES INOTIFY_MAX_USER_INSTANCES \
   DOCKER_ENABLED DOCKER_DEFAULT_NOFILE_LIMIT \
   POSTGRESQL_ENABLED MONGODB_ENABLED \
   NGINX_ENABLED POSTGRESQL_MAJOR_VERSION POSTGRESQL_PACKAGE_VERSION \
@@ -123,6 +124,21 @@ systemctl is-active --quiet apt-daily-upgrade.timer
 systemctl is-active --quiet unattended-upgrades.service
 systemctl is-enabled --quiet unattended-upgrades.service
 pass "automatic Ubuntu update services"
+
+# File-watcher capacity must be active now and persist across guest boots. These
+# are ceilings only; this check does not allocate hundreds of thousands of
+# watches or disturb a running VS Code Remote session.
+[ "$(sysctl --values fs.inotify.max_user_watches)" = \
+  "$INOTIFY_MAX_USER_WATCHES" ]
+[ "$(sysctl --values fs.inotify.max_user_instances)" = \
+  "$INOTIFY_MAX_USER_INSTANCES" ]
+grep --fixed-strings --line-regexp --quiet \
+  "fs.inotify.max_user_watches=$INOTIFY_MAX_USER_WATCHES" \
+  /etc/sysctl.d/90-vagrant-development-inotify.conf
+grep --fixed-strings --line-regexp --quiet \
+  "fs.inotify.max_user_instances=$INOTIFY_MAX_USER_INSTANCES" \
+  /etc/sysctl.d/90-vagrant-development-inotify.conf
+pass "persistent development file-watcher capacity"
 
 # Root storage must use the supported LVM/filesystem model and have no unfinished
 # growth transaction. Static tests separately assert the reserve algorithm.

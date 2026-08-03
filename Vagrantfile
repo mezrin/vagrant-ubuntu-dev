@@ -92,6 +92,12 @@ Vagrant.configure("2") do |config|
   GIT_CORE_EDITOR = "code --wait"
   GITHUB_SSH_IDENTITY_FILE = "~/.ssh/my-ssh-key"
 
+  # Large repositories and multiple VS Code Remote sessions can exhaust
+  # Ubuntu's small default inotify quotas. These are per-user ceilings; actual
+  # watches allocate kernel memory only as tools request them.
+  INOTIFY_MAX_USER_WATCHES = 524_288
+  INOTIFY_MAX_USER_INSTANCES = 1_024
+
   # Adapter 1 is Parallels Shared/NAT and is created by the provider. Adapter 2
   # is the stable host-only address below. Adapter 3 bridges to host Wi-Fi.
   # Lower route metrics win, so Bridged Wi-Fi is preferred and Shared/NAT is the
@@ -278,7 +284,8 @@ Vagrant.configure("2") do |config|
   # independently. This inventory must match every referenced executable script.
   PROVISION_DIRECTORY = File.expand_path("provision/ubuntu-26.04", __dir__)
   PROVISION_SCRIPTS = %w[
-    os-package-security-baseline.sh network-security.sh enlarge-hdd.sh
+    os-package-security-baseline.sh development-kernel-limits.sh
+    network-security.sh enlarge-hdd.sh
     ubuntu-desktop.sh general-dev-user.sh docker.sh rust-for-substrate.sh
     python-uv.sh python.sh python-user.sh nodejs.sh postgresql.sh mongodb.sh
     nginx.sh
@@ -314,6 +321,13 @@ Vagrant.configure("2") do |config|
   validate.call(POSTGRESQL_ALLOW_PACKAGE_DOWNGRADE == true ||
                 POSTGRESQL_ALLOW_PACKAGE_DOWNGRADE == false,
                 "POSTGRESQL_ALLOW_PACKAGE_DOWNGRADE must be true or false")
+  development_kernel_limits = [
+    INOTIFY_MAX_USER_WATCHES, INOTIFY_MAX_USER_INSTANCES
+  ]
+  validate.call(development_kernel_limits.all? { |limit|
+                  limit.is_a?(Integer) && limit.positive?
+                },
+                "inotify limits must be positive integers")
 
   # Validate stable names and route policy used by several downstream scripts.
   validate.call(VM_NAME.match?(/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/),
@@ -679,6 +693,18 @@ Vagrant.configure("2") do |config|
                         "OS_APT_PACKAGES" => OS_APT_PACKAGES.join(" ")
                       }
 
+  # Large source trees and multiple Remote SSH windows can consume tens of
+  # thousands of Linux inotify watches. Persist and activate explicit ceilings
+  # before user-facing development tools start.
+  config.vm.provision "development-kernel-limits",
+                      type: "shell",
+                      privileged: true,
+                      path: provision_script.call("development-kernel-limits.sh"),
+                      env: {
+                        "INOTIFY_MAX_USER_WATCHES" => INOTIFY_MAX_USER_WATCHES.to_s,
+                        "INOTIFY_MAX_USER_INSTANCES" => INOTIFY_MAX_USER_INSTANCES.to_s
+                      }
+
   # Reconcile all three guest interfaces, route preference, rollback protection,
   # and UFW rules. Unless provisioning is disabled, run: "always" repairs drift
   # on every up and reload after one-time provisioners are considered complete.
@@ -908,6 +934,8 @@ Vagrant.configure("2") do |config|
                         "BRIDGED_ROUTE_METRIC" => BRIDGED_NETWORK_ROUTE_METRIC.to_s,
                         "SHARED_ROUTE_METRIC" => SHARED_NETWORK_ROUTE_METRIC.to_s,
                         "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" "),
+                        "INOTIFY_MAX_USER_WATCHES" => INOTIFY_MAX_USER_WATCHES.to_s,
+                        "INOTIFY_MAX_USER_INSTANCES" => INOTIFY_MAX_USER_INSTANCES.to_s,
                         "DOCKER_ENABLED" => PROVISION_DOCKER.to_s,
                         "DOCKER_DEFAULT_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
                         "POSTGRESQL_ENABLED" => PROVISION_POSTGRESQL.to_s,

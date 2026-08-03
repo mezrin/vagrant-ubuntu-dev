@@ -166,8 +166,9 @@ The integration provisioner is configured with `run: "never"`, so normal
 does not require the host `MONGODB_PASSWORD`; MongoDB authentication is verified
 through the already installed root-only guest secret. It checks live network
 roles and IPv4/IPv6 metrics, UFW and Docker ingress chains, automatic-update
-timers, LVM state, exact PostgreSQL and MongoDB behavior, and local Nginx
-HTTP/TLS responses. It changes no guest configuration or application data.
+timers, persistent file-watcher capacity, LVM state, exact PostgreSQL and
+MongoDB behavior, and local Nginx HTTP/TLS responses. It changes no guest
+configuration or application data.
 
 Like every successful provisioning action, an integration-test run is followed
 by the conditional reboot check. If Ubuntu already has
@@ -532,6 +533,44 @@ recreate that container to apply the new limit.
 
 ### Development toolchains
 
+Large repositories and several VS Code Remote SSH windows can exceed Ubuntu's
+default inotify quotas. When that happens, VS Code reports `ENOSPC` or **Unable
+to watch for file changes** even though the disk still has free space. The
+template persists these per-user ceilings and applies them without a reboot:
+
+```text
+fs.inotify.max_user_watches=524288
+fs.inotify.max_user_instances=1024
+```
+
+The kernel allocates memory only for watches that applications actually create;
+the values do not reserve that memory up front. At the commonly documented
+estimate of about 1080 bytes per watch on 64-bit Linux, consuming the complete
+watch ceiling could use about 540 MiB of kernel memory. After raising a limit,
+run **Developer: Reload Window** in a VS Code window that already failed because
+watch registration is not automatically retried reliably.
+
+The higher ceiling is a safety margin, not a reason to watch generated output.
+Open the active repository or worktree instead of a parent directory containing
+many repositories, close unused Remote SSH windows, and exclude large generated
+trees in the workspace's `.vscode/settings.json` when appropriate:
+
+```json
+{
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/.venv/**": true,
+    "**/node_modules/**": true,
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true
+  }
+}
+```
+
+Watcher exclusions remain repository/user configuration rather than a Vagrant
+default: different projects need different generated directories, and the VM
+template must not overwrite an engineer's VS Code settings.
+
 - Git identity, editor, pruning behavior, and the GitHub SSH key path are set
   for the `vagrant` user.
 - Rust is installed for `vagrant` through rustup with exact stable and dated
@@ -556,6 +595,7 @@ Edit values only in the `Config` section near the beginning of
 | --- | --- |
 | `VM_NAME`, `PROVIDER_VM_NAME` | Stable Vagrant, Parallels, hostname, and MongoDB identity |
 | `DEFAULT_USER`, `GIT_*`, `GITHUB_*` | Guest user-level development preferences |
+| `INOTIFY_MAX_USER_WATCHES`, `INOTIFY_MAX_USER_INSTANCES` | Per-user Linux file-watch and watcher-instance ceilings for large development workspaces |
 | `PRIVATE_NETWORK_*`, route metrics, port and VPN tunnel lists | Static host access, route priority, and firewall policy |
 | `PROVISION_*` | Whether each optional feature is provisioned |
 | `NGINX_*`, `CERTBOT_*` | Static site names, bridged exposure, and certificates |
@@ -585,6 +625,7 @@ Provisioners execute in this order:
 | Provisioner | Runs as | Responsibility |
 | --- | --- | --- |
 | `os-package-security-baseline` | root | Install the combined Ubuntu package set, apply security updates, and always restore automatic-update services |
+| `development-kernel-limits` | root | Persist and immediately apply file-watcher capacity for large development workspaces |
 | `network-security` | root, every provisioning-enabled up/reload | Reconcile Netplan routes and UFW rules |
 | `enlarge-hdd` | root, every provisioning-enabled up/reload | Reconcile partition, LVM, and filesystem growth while preserving existing free VG extents |
 | `ubuntu-desktop` | root | Enable the graphical login and graphical boot target |
@@ -669,6 +710,10 @@ an offline or permanently available build. No local artifact mirror is provided.
   treated as application-owned; custom rules must not reuse those priorities.
 - **Development firewall policy.** The host-only port list is intentionally
   broad for development. It should be reduced for a less trusted host.
+- **Inotify capacity has a memory cost.** The configured values are per-user
+  ceilings, not reservations, but a process that consumes all 524,288 watches
+  can use roughly 540 MiB of kernel memory. Project-specific watcher exclusions
+  are intentionally not imposed by this machine template.
 - **MongoDB is not production-ready.** It has no TLS, backup, high availability,
   or least-privilege application role. The 7.0 image is also a deliberate kernel
   compatibility choice; a future release-series change requires MongoDB's
@@ -800,6 +845,28 @@ vagrant ssh -c 'sudo docker logs --tail 200 mongodb'
 
 The provisioner also prints container state and recent logs when it fails.
 
+### VS Code cannot watch file changes
+
+This message normally means that Linux's inotify watch quota was exhausted; the
+`ENOSPC` name refers to watcher capacity and does not imply a full disk. Confirm
+the live template-managed values:
+
+```sh
+vagrant ssh -c 'sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances'
+```
+
+They should be `524288` and `1024` with the default configuration. If they are
+lower, reconcile only this provisioner:
+
+```sh
+vagrant provision dev-07 --provision-with development-kernel-limits
+```
+
+Then use **Developer: Reload Window** in affected VS Code windows. If the
+warning returns, reduce the watched workspace with `files.watcherExclude`, open
+only the active worktree, and close unused Remote SSH sessions. Do not raise the
+limit indefinitely: each active watch consumes unswappable kernel memory.
+
 ### A pinned download or package is unavailable
 
 Confirm that the configured version still exists for Ubuntu 26.04 ARM64. Update
@@ -827,3 +894,4 @@ Useful upstream references:
 - [Parallels provider configuration](https://parallels.github.io/vagrant-parallels/docs/configuration.html)
 - [Docker Engine 29 release notes](https://docs.docker.com/engine/release-notes/29/)
 - [MongoDB UNIX ulimit settings](https://www.mongodb.com/docs/manual/reference/ulimit/)
+- [VS Code Linux file-watch limits](https://code.visualstudio.com/docs/setup/linux#_visual-studio-code-is-unable-to-watch-for-file-changes-in-this-large-workspace-error-enospc)

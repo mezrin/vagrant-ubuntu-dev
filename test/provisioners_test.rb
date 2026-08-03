@@ -17,9 +17,10 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
   PROVISION_DIRECTORY = File.join(VAGRANT_DIRECTORY, "provision", "ubuntu-26.04")
   GUEST_INTEGRATION_SCRIPT = File.join(VAGRANT_DIRECTORY, "test", "guest_integration.sh")
   EXPECTED_SCRIPTS = %w[
-    docker.sh enlarge-hdd.sh general-dev-user.sh mongodb.sh network-security.sh
-    nginx.sh nodejs.sh os-package-security-baseline.sh postgresql.sh python-user.sh
-    python-uv.sh python.sh rust-for-substrate.sh ubuntu-desktop.sh
+    development-kernel-limits.sh docker.sh enlarge-hdd.sh general-dev-user.sh
+    mongodb.sh network-security.sh nginx.sh nodejs.sh
+    os-package-security-baseline.sh postgresql.sh python-user.sh python-uv.sh
+    python.sh rust-for-substrate.sh ubuntu-desktop.sh
   ].freeze
 
   # Vagrantfiles are Ruby DSL files, so Ruby's parser can validate them without
@@ -206,6 +207,17 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes apt,
                     "systemctl is-active --quiet apt-daily.timer apt-daily-upgrade.timer"
     assert_includes apt, 'Unattended-Upgrade::OnlyOnACPower "false";'
+
+    kernel_limits = provision_source("development-kernel-limits.sh")
+    assert_includes kernel_limits,
+                    "/etc/sysctl.d/90-vagrant-development-inotify.conf"
+    assert_includes kernel_limits, "fs.inotify.max_user_watches="
+    assert_includes kernel_limits, "fs.inotify.max_user_instances="
+    assert_includes kernel_limits, 'sysctl --load "$SYSCTL_CONFIG"'
+    assert_includes kernel_limits,
+                    'sysctl --values fs.inotify.max_user_watches'
+    assert_includes kernel_limits,
+                    'sysctl --values fs.inotify.max_user_instances'
 
     disk = provision_source("enlarge-hdd.sh")
     assert_includes disk, "root-vg-growth"
