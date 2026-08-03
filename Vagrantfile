@@ -179,6 +179,10 @@ Vagrant.configure("2") do |config|
   DOCKER_CONTAINERD_VERSION = "2.2.6-1~ubuntu.26.04~resolute"
   DOCKER_BUILDX_VERSION = "0.36.0-1~ubuntu.26.04~resolute"
   DOCKER_COMPOSE_VERSION = "5.3.1-1~ubuntu.26.04~resolute"
+  # Docker 29 inherits systemd's low 1024 soft open-file limit for newly
+  # created containers. MongoDB recommends 64000, and this development guest
+  # also creates disposable MongoDB containers outside Vagrant provisioning.
+  DOCKER_DEFAULT_NOFILE_LIMIT = 64_000
 
   # Rustup installer integrity plus exact stable and dated nightly toolchains.
   RUSTUP_VERSION = "1.29.0"
@@ -444,6 +448,9 @@ Vagrant.configure("2") do |config|
   ]
   validate.call(exact_package_versions.none? { |version| version.empty? || version.match?(/[\s*]/) },
                 "third-party apt package versions must be exact")
+  validate.call(DOCKER_DEFAULT_NOFILE_LIMIT.is_a?(Integer) &&
+                DOCKER_DEFAULT_NOFILE_LIMIT.positive?,
+                "DOCKER_DEFAULT_NOFILE_LIMIT must be a positive integer")
   validate.call(POSTGRESQL_PACKAGE_VERSION.start_with?("#{POSTGRESQL_MAJOR_VERSION}."),
                 "the PostgreSQL package version must match its major version")
   validate.call(POSTGRESQL_MAJOR_VERSION.match?(/\A[1-9][0-9]*\z/),
@@ -740,6 +747,7 @@ Vagrant.configure("2") do |config|
                           "DOCKER_CONTAINERD_VERSION" => DOCKER_CONTAINERD_VERSION,
                           "DOCKER_BUILDX_VERSION" => DOCKER_BUILDX_VERSION,
                           "DOCKER_COMPOSE_VERSION" => DOCKER_COMPOSE_VERSION,
+                          "DOCKER_DEFAULT_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
                           "DEFAULT_USER" => DEFAULT_USER,
                           "PRIVATE_NETWORK_IP" => PRIVATE_NETWORK_IP,
                           "PRIVATE_NETWORK_CIDR" => PRIVATE_NETWORK_CIDR,
@@ -858,6 +866,7 @@ Vagrant.configure("2") do |config|
         "MONGODB_HEALTH_START_PERIOD" => MONGODB_HEALTH_START_PERIOD,
         "MONGODB_HEALTH_RETRIES" => MONGODB_HEALTH_RETRIES.to_s,
         "MONGODB_DIAGNOSTIC_LOG_LINES" => MONGODB_DIAGNOSTIC_LOG_LINES.to_s,
+        "MONGODB_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
         "VM_NAME" => VM_NAME,
         "PRIVATE_NETWORK_IP" => PRIVATE_NETWORK_IP,
         "MONGODB_REPLICA_SET" => MONGODB_REPLICA_SET,
@@ -900,6 +909,7 @@ Vagrant.configure("2") do |config|
                         "SHARED_ROUTE_METRIC" => SHARED_NETWORK_ROUTE_METRIC.to_s,
                         "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" "),
                         "DOCKER_ENABLED" => PROVISION_DOCKER.to_s,
+                        "DOCKER_DEFAULT_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
                         "POSTGRESQL_ENABLED" => PROVISION_POSTGRESQL.to_s,
                         "MONGODB_ENABLED" => PROVISION_MONGODB.to_s,
                         "NGINX_ENABLED" => PROVISION_NGINX.to_s,
@@ -910,6 +920,7 @@ Vagrant.configure("2") do |config|
                         "MONGODB_VOLUME" => MONGODB_VOLUME,
                         "MONGODB_PORT" => MONGODB_PORT.to_s,
                         "MONGODB_MANAGED_LABEL" => MONGODB_MANAGED_LABEL,
+                        "MONGODB_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
                         "MONGODB_SECRETS_DIRECTORY" => MONGODB_SECRETS_DIRECTORY,
                         "NGINX_PROBE_SERVER_NAME" => NGINX_SERVER_NAMES.first || "localhost",
                         "CERTBOT_CERTIFICATE_NAME" => NGINX_SERVER_NAMES.first.to_s

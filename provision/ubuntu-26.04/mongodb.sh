@@ -20,11 +20,16 @@ for VARIABLE in \
   MONGODB_READY_ATTEMPTS MONGODB_HEALTH_ATTEMPTS \
   MONGODB_RETRY_DELAY_SECONDS MONGODB_HEALTH_INTERVAL \
   MONGODB_HEALTH_TIMEOUT MONGODB_HEALTH_START_PERIOD \
-  MONGODB_HEALTH_RETRIES MONGODB_DIAGNOSTIC_LOG_LINES VM_NAME \
+  MONGODB_HEALTH_RETRIES MONGODB_DIAGNOSTIC_LOG_LINES \
+  MONGODB_NOFILE_LIMIT VM_NAME \
   PRIVATE_NETWORK_IP MONGODB_REPLICA_SET MONGODB_REPLICA_MEMBER \
   MONGODB_USERNAME MONGODB_AUTH_DATABASE; do
   : "${!VARIABLE:?}"
 done
+if [[ ! "$MONGODB_NOFILE_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MONGODB_NOFILE_LIMIT must be a positive integer." >&2
+  exit 1
+fi
 
 echo "\n\n###\n### Run authenticated MongoDB on the host-only network\n###\n"
 
@@ -456,7 +461,8 @@ DESIRED_CONFIG_DIGEST="$(
     "$MONGODB_HEALTH_INTERVAL" \
     "$MONGODB_HEALTH_TIMEOUT" \
     "$MONGODB_HEALTH_START_PERIOD" \
-    "$MONGODB_HEALTH_RETRIES" | sha256sum | awk '{ print $1 }'
+    "$MONGODB_HEALTH_RETRIES" \
+    "$MONGODB_NOFILE_LIMIT" | sha256sum | awk '{ print $1 }'
 )"
 
 # Inspect an existing same-named container before acting. Refuse a clearly
@@ -520,6 +526,7 @@ if ! docker container inspect "$MONGODB_CONTAINER" > /dev/null 2>&1; then
     --publish "$PRIVATE_NETWORK_IP:$MONGODB_PORT:27017" \
     --restart unless-stopped \
     --stop-timeout "$MONGODB_STOP_TIMEOUT_SECONDS" \
+    --ulimit "nofile=$MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT" \
     --init \
     --security-opt no-new-privileges=true \
     --health-cmd "mongosh --quiet --file $CONTAINER_VERIFY_SCRIPT" \
@@ -634,6 +641,21 @@ fi
 if [ "$(docker container inspect --format '{{.HostConfig.RestartPolicy.Name}}' \
         "$MONGODB_CONTAINER")" != "unless-stopped" ]; then
   echo "MongoDB has an unexpected restart policy." >&2
+  exit 1
+fi
+CONFIGURED_NOFILE_LIMIT="$(docker container inspect \
+  --format '{{range .HostConfig.Ulimits}}{{if eq .Name "nofile"}}{{.Soft}}:{{.Hard}}{{end}}{{end}}' \
+  "$MONGODB_CONTAINER")"
+if [ "$CONFIGURED_NOFILE_LIMIT" != \
+     "$MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT" ]; then
+  echo "MongoDB has an unexpected configured open-file limit: $CONFIGURED_NOFILE_LIMIT" >&2
+  exit 1
+fi
+RUNTIME_NOFILE_LIMIT="$(docker exec "$MONGODB_CONTAINER" sh -c \
+  'printf "%s:%s\n" "$(ulimit -Sn)" "$(ulimit -Hn)"')"
+if [ "$RUNTIME_NOFILE_LIMIT" != \
+     "$MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT" ]; then
+  echo "MongoDB has an unexpected runtime open-file limit: $RUNTIME_NOFILE_LIMIT" >&2
   exit 1
 fi
 if [ "$(docker container inspect \

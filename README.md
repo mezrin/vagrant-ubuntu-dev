@@ -418,6 +418,12 @@ retained. The container, volume, and secret directory carry or require explicit
 template-ownership markers. A same-named unowned resource is rejected rather
 than adopted.
 
+The container explicitly sets both its soft and hard open-file limits to
+`64000`, MongoDB's recommended value. The limit participates in the container
+configuration digest and is verified both in Docker metadata and inside the
+running process. This prevents a collection-heavy workload from reaching
+Docker 29's inherited soft limit of `1024` and terminating with `EMFILE`.
+
 When a managed container must be replaced, the old definition is stopped and
 renamed but kept until the candidate passes authenticated topology, Docker
 health, port-binding, restart-policy, volume, and ownership checks. Failure
@@ -516,6 +522,14 @@ Bridged adapters, even if a compose file explicitly binds to all host addresses.
 Reprovisioning restarts the Docker daemon only after a package-version or daemon
 configuration change; unchanged running containers are not interrupted.
 
+Docker 29 inherits systemd's `1024` soft open-file limit unless a container or
+daemon configuration overrides it. This guest sets the daemon default to
+`64000` for newly created development containers. Workload repositories should
+still declare their own `--ulimit nofile=64000:64000` or Compose `ulimits`
+setting so the same test remains portable to CI and non-Vagrant Docker hosts.
+Changing the daemon default does not retrofit an already-created container;
+recreate that container to apply the new limit.
+
 ### Development toolchains
 
 - Git identity, editor, pruning behavior, and the GitHub SSH key path are set
@@ -546,6 +560,7 @@ Edit values only in the `Config` section near the beginning of
 | `PROVISION_*` | Whether each optional feature is provisioned |
 | `NGINX_*`, `CERTBOT_*` | Static site names, bridged exposure, and certificates |
 | `*_VERSION`, `*_URL`, `*_SHA256` | Reproducible external software inputs |
+| `DOCKER_DEFAULT_NOFILE_LIMIT` | Open-file limit inherited by new containers and explicitly applied to MongoDB |
 | `MONGODB_*` | Container identity, replica set, bind address, secret paths, and health timing |
 | `PARALLELS_RESOURCES_*`, `RESOURCES_*` | Disk, CPU, and memory allocation |
 
@@ -810,3 +825,5 @@ Useful upstream references:
 - [Vagrant documentation](https://developer.hashicorp.com/vagrant/docs)
 - [Vagrant Parallels provider](https://parallels.github.io/vagrant-parallels/docs/)
 - [Parallels provider configuration](https://parallels.github.io/vagrant-parallels/docs/configuration.html)
+- [Docker Engine 29 release notes](https://docs.docker.com/engine/release-notes/29/)
+- [MongoDB UNIX ulimit settings](https://www.mongodb.com/docs/manual/reference/ulimit/)

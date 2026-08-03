@@ -9,9 +9,11 @@ set -Eeuo pipefail
 for VARIABLE in \
   PRIVATE_NETWORK_IP PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC \
   SHARED_ROUTE_METRIC TRUSTED_VPN_TUNNEL_INTERFACES \
-  DOCKER_ENABLED POSTGRESQL_ENABLED MONGODB_ENABLED \
+  DOCKER_ENABLED DOCKER_DEFAULT_NOFILE_LIMIT \
+  POSTGRESQL_ENABLED MONGODB_ENABLED \
   NGINX_ENABLED POSTGRESQL_MAJOR_VERSION POSTGRESQL_PACKAGE_VERSION \
-  MONGODB_CONTAINER MONGODB_IMAGE MONGODB_VOLUME MONGODB_PORT MONGODB_MANAGED_LABEL \
+  MONGODB_CONTAINER MONGODB_IMAGE MONGODB_VOLUME MONGODB_PORT \
+  MONGODB_MANAGED_LABEL MONGODB_NOFILE_LIMIT \
   MONGODB_SECRETS_DIRECTORY NGINX_PROBE_SERVER_NAME \
   CERTBOT_CERTIFICATE_NAME; do
   : "${!VARIABLE?Integration input $VARIABLE is unset}"
@@ -140,6 +142,19 @@ if [ "$DOCKER_ENABLED" = true ]; then
   systemctl is-active --quiet docker
   systemctl is-active --quiet vagrant-docker-ingress.service
   dockerd --validate --config-file=/etc/docker/daemon.json
+  # Confirm that ad-hoc containers inherit enough descriptors for development
+  # databases even when their creation command omits an explicit ulimit.
+  python3 - "$DOCKER_DEFAULT_NOFILE_LIMIT" <<'PYTHON'
+import json
+import sys
+
+with open("/etc/docker/daemon.json", encoding="utf-8") as daemon_file:
+    daemon_config = json.load(daemon_file)
+
+expected = int(sys.argv[1])
+nofile = daemon_config["default-ulimits"]["nofile"]
+assert nofile == {"Name": "nofile", "Soft": expected, "Hard": expected}
+PYTHON
   docker info > /dev/null
   iptables --wait --check FORWARD --jump DOCKER-USER
   iptables --wait --check DOCKER-USER --jump VAGRANT-DOCKER-INGRESS
@@ -187,6 +202,13 @@ if [ "$MONGODB_ENABLED" = true ]; then
         "$MONGODB_VOLUME")" = true ]
   [ "$(docker container port "$MONGODB_CONTAINER" 27017/tcp)" = \
     "$PRIVATE_NETWORK_IP:$MONGODB_PORT" ]
+  [ "$(docker container inspect \
+        --format '{{range .HostConfig.Ulimits}}{{if eq .Name "nofile"}}{{.Soft}}:{{.Hard}}{{end}}{{end}}' \
+        "$MONGODB_CONTAINER")" = \
+    "$MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT" ]
+  [ "$(docker exec "$MONGODB_CONTAINER" sh -c \
+        'printf "%s:%s\n" "$(ulimit -Sn)" "$(ulimit -Hn)"')" = \
+    "$MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT" ]
   ! docker container inspect "${MONGODB_CONTAINER}-vagrant-rollback" \
     > /dev/null 2>&1
   docker exec "$MONGODB_CONTAINER" mongosh --quiet \

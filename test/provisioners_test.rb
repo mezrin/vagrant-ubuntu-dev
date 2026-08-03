@@ -180,6 +180,9 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     docker = provision_source("docker.sh")
     assert_includes docker, "DOCKER-USER"
     assert_includes docker, "VAGRANT-DOCKER-INGRESS"
+    assert_includes docker, '"default-ulimits"'
+    assert_includes docker, '"Soft": $DOCKER_DEFAULT_NOFILE_LIMIT'
+    assert_includes docker, '"Hard": $DOCKER_DEFAULT_NOFILE_LIMIT'
     assert_includes docker, '--in-interface "$SHARED_INTERFACE" --jump DROP'
     assert_includes docker, '--in-interface "$BRIDGED_INTERFACE" --jump DROP'
     assert_includes docker, "vagrant-docker-ingress.service"
@@ -274,6 +277,10 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes mongodb, 'MONGODB_SECRET_SNAPSHOT'
     assert_includes mongodb, 'chown "root:$MONGODB_GID" "$MONGODB_SECRET_TEMP"'
     assert_includes mongodb, 'chmod 0440 "$MONGODB_SECRET_TEMP"'
+    assert_includes mongodb,
+                    '--ulimit "nofile=$MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT"'
+    assert_includes mongodb, 'CONFIGURED_NOFILE_LIMIT'
+    assert_includes mongodb, 'RUNTIME_NOFILE_LIMIT'
     assert_operator mongodb.scan("> /dev/null 2>&1; then").length, :>=, 2
     refute_match(/\bcat\(/, mongodb)
     assert_equal 7, mongodb.scan("fs.readFileSync").length
@@ -304,6 +311,8 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes source, "iptables --wait --check"
     assert_includes source, "pg_isready --quiet"
     assert_includes source, "/run/secrets/mongodb/verify.js"
+    assert_includes source, 'daemon_config["default-ulimits"]["nofile"]'
+    assert_includes source, 'MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT'
     assert_includes source, '"https://$NGINX_PROBE_SERVER_NAME/"'
     refute_match(/\b(?:apt-get|docker run|ufw allow|ufw delete)\b/, source)
     refute_match(/systemctl (?:start|stop|restart|reload|enable|disable)\b/, source)

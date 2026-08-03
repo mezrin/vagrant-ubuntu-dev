@@ -14,10 +14,14 @@ set -Eeuo pipefail
 for VARIABLE in \
   DOCKER_APT_KEY_URL DOCKER_APT_REPOSITORY_URL DOCKER_APT_KEY_SHA256 \
   DOCKER_CE_VERSION DOCKER_CONTAINERD_VERSION DOCKER_BUILDX_VERSION \
-  DOCKER_COMPOSE_VERSION DEFAULT_USER PRIVATE_NETWORK_IP \
+  DOCKER_COMPOSE_VERSION DOCKER_DEFAULT_NOFILE_LIMIT DEFAULT_USER PRIVATE_NETWORK_IP \
   PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC SHARED_ROUTE_METRIC; do
   : "${!VARIABLE:?}"
 done
+if [[ ! "$DOCKER_DEFAULT_NOFILE_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "DOCKER_DEFAULT_NOFILE_LIMIT must be a positive integer." >&2
+  exit 1
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -144,6 +148,13 @@ cat > "$DOCKER_CONFIG_TEMP" <<JSON
   "log-opts": {
     "mode": "non-blocking",
     "max-buffer-size": "10m"
+  },
+  "default-ulimits": {
+    "nofile": {
+      "Name": "nofile",
+      "Soft": $DOCKER_DEFAULT_NOFILE_LIMIT,
+      "Hard": $DOCKER_DEFAULT_NOFILE_LIMIT
+    }
   }
 }
 JSON
