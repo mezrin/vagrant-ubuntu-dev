@@ -18,7 +18,7 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
   GUEST_INTEGRATION_SCRIPT = File.join(VAGRANT_DIRECTORY, "test", "guest_integration.sh")
   EXPECTED_SCRIPTS = %w[
     development-kernel-limits.sh docker.sh enlarge-hdd.sh general-dev-user.sh
-    mongodb.sh network-security.sh nginx.sh nodejs.sh
+    github-cli.sh mongodb.sh network-security.sh nginx.sh nodejs.sh
     os-package-security-baseline.sh postgresql.sh python-user.sh python-uv.sh
     python.sh rust-for-substrate.sh ubuntu-desktop.sh
   ].freeze
@@ -254,6 +254,15 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes uv, "verify_uv_version uv"
     assert_includes uv, "verify_uv_version uvx"
 
+    github_cli = provision_source("github-cli.sh")
+    assert_includes github_cli, "GITHUB_CLI_ARCHIVE_SHA256"
+    assert_includes github_cli, "sha256sum --check --strict"
+    assert_includes github_cli, "--proto-redir '=https'"
+    assert_includes github_cli, 'dpkg --print-architecture'
+    assert_includes github_cli, 'install -o root -g root -m 0755'
+    assert_includes github_cli, "/usr/local/bin/gh --version"
+    assert_includes github_cli, "/usr/local/bin/gh help"
+
     integration = File.read(GUEST_INTEGRATION_SCRIPT)
     assert_includes integration,
                     "for (field_index = 1; field_index <= NF; field_index++)"
@@ -323,6 +332,7 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes source, "iptables --wait --check"
     assert_includes source, "pg_isready --quiet"
     assert_includes source, "/run/secrets/mongodb/verify.js"
+    assert_includes source, 'pass "pinned GitHub CLI"'
     assert_includes source, 'daemon_config["default-ulimits"]["nofile"]'
     assert_includes source, 'MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT'
     assert_includes source, '"https://$NGINX_PROBE_SERVER_NAME/"'

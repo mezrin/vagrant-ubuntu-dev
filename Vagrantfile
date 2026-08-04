@@ -121,6 +121,7 @@ Vagrant.configure("2") do |config|
   # disk growth, and the post-provision reboot check are always configured.
   PROVISION_UBUNTU_DESKTOP = true
   PROVISION_GENERAL_DEV_PACKAGES = true
+  PROVISION_GITHUB_CLI = true
   PROVISION_DOCKER = true
   PROVISION_RUST_FOR_SUBSTRATE = true
   PROVISION_PYTHON = true
@@ -176,6 +177,12 @@ Vagrant.configure("2") do |config|
   # - Third-party apt packages use exact versions and signed repositories.
   # - Container images use a readable tag plus immutable manifest digest.
   # Ubuntu archive packages intentionally track signed security updates.
+
+  # GitHub's official ARM64 release archive. Authentication is deliberately not
+  # provisioned because account tokens are personal, revocable secret state.
+  GITHUB_CLI_VERSION = "2.94.0"
+  GITHUB_CLI_ARCHIVE_SHA256 = "705a23b70b0f1b7ba4c302fdcef392ce3edaacfa7ce8e85e4d93d72ea800a538"
+  GITHUB_CLI_ARCHIVE_URL = "https://github.com/cli/cli/releases/download/v#{GITHUB_CLI_VERSION}/gh_#{GITHUB_CLI_VERSION}_linux_arm64.tar.gz"
 
   # Docker's signed apt repository and exact package versions.
   DOCKER_APT_KEY_SHA256 = "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
@@ -286,7 +293,7 @@ Vagrant.configure("2") do |config|
   PROVISION_SCRIPTS = %w[
     os-package-security-baseline.sh development-kernel-limits.sh
     network-security.sh enlarge-hdd.sh
-    ubuntu-desktop.sh general-dev-user.sh docker.sh rust-for-substrate.sh
+    ubuntu-desktop.sh general-dev-user.sh github-cli.sh docker.sh rust-for-substrate.sh
     python-uv.sh python.sh python-user.sh nodejs.sh postgresql.sh mongodb.sh
     nginx.sh
   ].freeze
@@ -307,6 +314,7 @@ Vagrant.configure("2") do |config|
   feature_flags = {
     "PROVISION_UBUNTU_DESKTOP" => PROVISION_UBUNTU_DESKTOP,
     "PROVISION_GENERAL_DEV_PACKAGES" => PROVISION_GENERAL_DEV_PACKAGES,
+    "PROVISION_GITHUB_CLI" => PROVISION_GITHUB_CLI,
     "PROVISION_DOCKER" => PROVISION_DOCKER,
     "PROVISION_RUST_FOR_SUBSTRATE" => PROVISION_RUST_FOR_SUBSTRATE,
     "PROVISION_PYTHON" => PROVISION_PYTHON,
@@ -442,6 +450,7 @@ Vagrant.configure("2") do |config|
   # SHA-256 values, exact package versions, and immutable version identifiers.
   # Actual bytes are verified by guest scripts after download.
   external_urls = [
+    GITHUB_CLI_ARCHIVE_URL,
     DOCKER_APT_KEY_URL, DOCKER_APT_REPOSITORY_URL, RUSTUP_INIT_URL,
     NVM_ARCHIVE_URL, NODE_ARCHIVE_URL, COREPACK_ARCHIVE_URL,
     POSTGRESQL_APT_KEY_URL, POSTGRESQL_APT_REPOSITORY_URL, UV_ARCHIVE_URL
@@ -449,6 +458,7 @@ Vagrant.configure("2") do |config|
   validate.call(external_urls.all? { |url| url.match?(/\Ahttps:\/\/[^\s]+\z/) },
                 "all external inputs must use explicit HTTPS URLs")
   external_sha256_values = [
+    GITHUB_CLI_ARCHIVE_SHA256,
     DOCKER_APT_KEY_SHA256, RUSTUP_INIT_SHA256, NVM_ARCHIVE_SHA256,
     NODE_ARCHIVE_SHA256, COREPACK_ARCHIVE_SHA256,
     POSTGRESQL_APT_KEY_SHA256, UV_ARCHIVE_SHA256
@@ -465,6 +475,8 @@ Vagrant.configure("2") do |config|
   validate.call(DOCKER_DEFAULT_NOFILE_LIMIT.is_a?(Integer) &&
                 DOCKER_DEFAULT_NOFILE_LIMIT.positive?,
                 "DOCKER_DEFAULT_NOFILE_LIMIT must be a positive integer")
+  validate.call(GITHUB_CLI_VERSION.match?(/\A\d+\.\d+\.\d+\z/),
+                "GITHUB_CLI_VERSION must be an exact semantic version")
   validate.call(POSTGRESQL_PACKAGE_VERSION.start_with?("#{POSTGRESQL_MAJOR_VERSION}."),
                 "the PostgreSQL package version must match its major version")
   validate.call(POSTGRESQL_MAJOR_VERSION.match?(/\A[1-9][0-9]*\z/),
@@ -483,6 +495,7 @@ Vagrant.configure("2") do |config|
                 PYTHON_VERSIONS.all? { |version| version.match?(/\A\d+\.\d+\.\d+\z/) },
                 "Python inputs must use exact semantic versions")
   versioned_urls = {
+    GITHUB_CLI_ARCHIVE_URL => GITHUB_CLI_VERSION,
     RUSTUP_INIT_URL => RUSTUP_VERSION,
     NVM_ARCHIVE_URL => NVM_VERSION,
     NODE_ARCHIVE_URL => NODE_VERSION,
@@ -756,6 +769,20 @@ Vagrant.configure("2") do |config|
                         }
   end
 
+  # Install the official GitHub CLI independently of personal authentication.
+  # Engineers authenticate as themselves later with `gh auth login`.
+  if PROVISION_GITHUB_CLI
+    config.vm.provision "github-cli",
+                        type: "shell",
+                        privileged: true,
+                        path: provision_script.call("github-cli.sh"),
+                        env: {
+                          "GITHUB_CLI_VERSION" => GITHUB_CLI_VERSION,
+                          "GITHUB_CLI_ARCHIVE_URL" => GITHUB_CLI_ARCHIVE_URL,
+                          "GITHUB_CLI_ARCHIVE_SHA256" => GITHUB_CLI_ARCHIVE_SHA256
+                        }
+  end
+
   # Docker is a system service, so installation is privileged. The script adds
   # DEFAULT_USER to the docker group, binds default published ports to the
   # host-only address, and installs a DOCKER-USER policy based on the declared
@@ -936,6 +963,8 @@ Vagrant.configure("2") do |config|
                         "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" "),
                         "INOTIFY_MAX_USER_WATCHES" => INOTIFY_MAX_USER_WATCHES.to_s,
                         "INOTIFY_MAX_USER_INSTANCES" => INOTIFY_MAX_USER_INSTANCES.to_s,
+                        "GITHUB_CLI_ENABLED" => PROVISION_GITHUB_CLI.to_s,
+                        "GITHUB_CLI_VERSION" => GITHUB_CLI_VERSION,
                         "DOCKER_ENABLED" => PROVISION_DOCKER.to_s,
                         "DOCKER_DEFAULT_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
                         "POSTGRESQL_ENABLED" => PROVISION_POSTGRESQL.to_s,

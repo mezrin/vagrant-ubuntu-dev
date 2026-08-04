@@ -10,6 +10,7 @@ for VARIABLE in \
   PRIVATE_NETWORK_IP PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC \
   SHARED_ROUTE_METRIC TRUSTED_VPN_TUNNEL_INTERFACES \
   INOTIFY_MAX_USER_WATCHES INOTIFY_MAX_USER_INSTANCES \
+  GITHUB_CLI_ENABLED GITHUB_CLI_VERSION \
   DOCKER_ENABLED DOCKER_DEFAULT_NOFILE_LIMIT \
   POSTGRESQL_ENABLED MONGODB_ENABLED \
   NGINX_ENABLED POSTGRESQL_MAJOR_VERSION POSTGRESQL_PACKAGE_VERSION \
@@ -21,7 +22,8 @@ for VARIABLE in \
 done
 
 for BOOLEAN_VARIABLE in \
-  DOCKER_ENABLED POSTGRESQL_ENABLED MONGODB_ENABLED NGINX_ENABLED; do
+  GITHUB_CLI_ENABLED DOCKER_ENABLED POSTGRESQL_ENABLED MONGODB_ENABLED \
+  NGINX_ENABLED; do
   case "${!BOOLEAN_VARIABLE}" in
     true|false) ;;
     *)
@@ -139,6 +141,14 @@ grep --fixed-strings --line-regexp --quiet \
   "fs.inotify.max_user_instances=$INOTIFY_MAX_USER_INSTANCES" \
   /etc/sysctl.d/90-vagrant-development-inotify.conf
 pass "persistent development file-watcher capacity"
+
+if [ "$GITHUB_CLI_ENABLED" = true ]; then
+  [ "$(command -v gh)" = /usr/local/bin/gh ]
+  IFS= read -r GITHUB_CLI_REPORTED_VERSION < <(gh --version)
+  [[ "$GITHUB_CLI_REPORTED_VERSION" = "gh version $GITHUB_CLI_VERSION "* ]]
+  gh help > /dev/null
+  pass "pinned GitHub CLI"
+fi
 
 # Root storage must use the supported LVM/filesystem model and have no unfinished
 # growth transaction. Static tests separately assert the reserve algorithm.

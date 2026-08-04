@@ -6,7 +6,8 @@ file is `Vagrantfile`.
 
 The template is intended for an Apple Silicon Mac and a trusted development
 environment. It installs a graphical Ubuntu desktop, common build tools,
-Docker, Rust, Python, Node.js, PostgreSQL, MongoDB, Nginx, and Certbot.
+GitHub CLI, Docker, Rust, Python, Node.js, PostgreSQL, MongoDB, Nginx, and
+Certbot.
 
 ## What the template creates
 
@@ -19,7 +20,7 @@ Docker, Rust, Python, Node.js, PostgreSQL, MongoDB, Nginx, and Certbot.
 | Guest internet | Bridged Wi-Fi is preferred; Parallels Shared/NAT is fallback |
 | Guest VPNs | UFW trusts decrypted return traffic on configured tunnel devices |
 | Host files | `synced_folder` is mounted at `/home/vagrant/synced_folder` |
-| Toolchains | Pinned Rust, Node.js, Corepack, uv, and Python versions |
+| Toolchains | Pinned GitHub CLI, Rust, Node.js, Corepack, uv, and Python versions |
 | Databases | Local PostgreSQL and authenticated, single-node MongoDB |
 | Web server | Static Nginx site; optional Let's Encrypt certificates |
 
@@ -166,9 +167,9 @@ The integration provisioner is configured with `run: "never"`, so normal
 does not require the host `MONGODB_PASSWORD`; MongoDB authentication is verified
 through the already installed root-only guest secret. It checks live network
 roles and IPv4/IPv6 metrics, UFW and Docker ingress chains, automatic-update
-timers, persistent file-watcher capacity, LVM state, exact PostgreSQL and
-MongoDB behavior, and local Nginx HTTP/TLS responses. It changes no guest
-configuration or application data.
+timers, persistent file-watcher capacity, the pinned GitHub CLI, LVM state,
+exact PostgreSQL and MongoDB behavior, and local Nginx HTTP/TLS responses. It
+changes no guest configuration or application data.
 
 Like every successful provisioning action, an integration-test run is followed
 by the conditional reboot check. If Ubuntu already has
@@ -263,6 +264,27 @@ The GitHub identity configured inside the guest is a separate key path:
 `~/.ssh/my-ssh-key`. The provisioner adds that path to the guest SSH config but
 does not create or copy the private key. Put the intended key in the guest and
 set mode `0600` before using GitHub over SSH.
+
+### GitHub CLI
+
+The official ARM64 `gh` binary is installed system-wide at
+`/usr/local/bin/gh`. Provisioning verifies an exact release archive before
+installing it but deliberately does not authenticate: a GitHub session is
+personal secret state and must not be stored in the Vagrantfile or provisioning
+logs.
+
+From a guest terminal, start GitHub's browser/device authentication flow and
+select SSH as the Git protocol:
+
+```sh
+gh auth login --hostname github.com --git-protocol ssh --web
+gh auth status
+```
+
+Authentication normally persists in the `vagrant` user's GitHub CLI
+configuration. It survives `vagrant halt` and `vagrant reload`, but it is lost
+with the rest of the guest when the VM is destroyed. Use `gh auth logout` before
+sharing or handing off a VM. Never put a personal access token in `Vagrantfile`.
 
 ### Shared files
 
@@ -573,6 +595,8 @@ template must not overwrite an engineer's VS Code settings.
 
 - Git identity, editor, pruning behavior, and the GitHub SSH key path are set
   for the `vagrant` user.
+- GitHub CLI is installed system-wide from a checksum-verified, exact official
+  ARM64 release. Authentication remains owned by the `vagrant` user.
 - Rust is installed for `vagrant` through rustup with exact stable and dated
   nightly toolchains. The nightly WebAssembly target is also installed.
 - `uv` is installed system-wide from a verified ARM64 archive. Exact managed
@@ -594,7 +618,8 @@ Edit values only in the `Config` section near the beginning of
 | Setting group | What it controls |
 | --- | --- |
 | `VM_NAME`, `PROVIDER_VM_NAME` | Stable Vagrant, Parallels, hostname, and MongoDB identity |
-| `DEFAULT_USER`, `GIT_*`, `GITHUB_*` | Guest user-level development preferences |
+| `DEFAULT_USER`, `GIT_*`, `GITHUB_SSH_IDENTITY_FILE` | Guest user-level development preferences |
+| `GITHUB_CLI_VERSION`, `GITHUB_CLI_ARCHIVE_*` | Exact official GitHub CLI release and verified ARM64 archive |
 | `INOTIFY_MAX_USER_WATCHES`, `INOTIFY_MAX_USER_INSTANCES` | Per-user Linux file-watch and watcher-instance ceilings for large development workspaces |
 | `PRIVATE_NETWORK_*`, route metrics, port and VPN tunnel lists | Static host access, route priority, and firewall policy |
 | `PROVISION_*` | Whether each optional feature is provisioned |
@@ -630,6 +655,7 @@ Provisioners execute in this order:
 | `enlarge-hdd` | root, every provisioning-enabled up/reload | Reconcile partition, LVM, and filesystem growth while preserving existing free VG extents |
 | `ubuntu-desktop` | root | Enable the graphical login and graphical boot target |
 | `general-dev-user` | `vagrant` | Configure Git and the GitHub SSH identity path |
+| `github-cli` | root | Install the pinned, checksum-verified official `gh` executable |
 | `docker` | root | Install and configure Docker and grant user access |
 | `rust-for-substrate` | `vagrant` | Install pinned Rust toolchains and WebAssembly target |
 | `python-uv` | root | Install verified `uv` and `uvx` executables |
@@ -668,6 +694,7 @@ The template uses several levels of pinning:
 
 - The Vagrant provider plugin and base box use exact versions.
 - Vendor archives use versioned HTTPS URLs and expected SHA-256 digests.
+- GitHub CLI uses an exact official ARM64 release archive and published SHA-256.
 - Docker and PostgreSQL repositories use verified signing keys and exact package
   versions.
 - The MongoDB image uses a readable tag plus an immutable manifest digest.
@@ -714,6 +741,9 @@ an offline or permanently available build. No local artifact mirror is provided.
   ceilings, not reservations, but a process that consumes all 524,288 watches
   can use roughly 540 MiB of kernel memory. Project-specific watcher exclusions
   are intentionally not imposed by this machine template.
+- **GitHub authentication is not provisioned.** Each engineer must run
+  `gh auth login` as the guest user. Tokens are deliberately excluded from the
+  template, logs, and integration tests.
 - **MongoDB is not production-ready.** It has no TLS, backup, high availability,
   or least-privilege application role. The 7.0 image is also a deliberate kernel
   compatibility choice; a future release-series change requires MongoDB's
@@ -892,6 +922,8 @@ Useful upstream references:
 - [Vagrant documentation](https://developer.hashicorp.com/vagrant/docs)
 - [Vagrant Parallels provider](https://parallels.github.io/vagrant-parallels/docs/)
 - [Parallels provider configuration](https://parallels.github.io/vagrant-parallels/docs/configuration.html)
+- [Official GitHub CLI Linux installation](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+- [GitHub CLI 2.94.0 release](https://github.com/cli/cli/releases/tag/v2.94.0)
 - [Docker Engine 29 release notes](https://docs.docker.com/engine/release-notes/29/)
 - [MongoDB UNIX ulimit settings](https://www.mongodb.com/docs/manual/reference/ulimit/)
 - [VS Code Linux file-watch limits](https://code.visualstudio.com/docs/setup/linux#_visual-studio-code-is-unable-to-watch-for-file-changes-in-this-large-workspace-error-enospc)
