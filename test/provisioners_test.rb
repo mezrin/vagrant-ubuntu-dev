@@ -19,8 +19,8 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
   EXPECTED_SCRIPTS = %w[
     development-kernel-limits.sh docker.sh enlarge-hdd.sh general-dev-user.sh
     github-cli.sh mongodb.sh network-security.sh nginx.sh nodejs.sh
-    os-package-security-baseline.sh postgresql.sh python-user.sh python-uv.sh
-    python.sh rust-for-substrate.sh ubuntu-desktop.sh
+    network-link-recovery.sh os-package-security-baseline.sh postgresql.sh
+    python-user.sh python-uv.sh python.sh rust-for-substrate.sh ubuntu-desktop.sh
   ].freeze
 
   # Vagrantfiles are Ruby DSL files, so Ruby's parser can validate them without
@@ -177,6 +177,23 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes network, "Vagrant managed: trusted VPN tunnel"
     assert_includes network, 'ufw allow in on "$VPN_INTERFACE"'
     refute_includes network, "delete allow 'Nginx Full'"
+
+    link_recovery = provision_source("network-link-recovery.sh")
+    assert_includes link_recovery, "PathChanged=/run/systemd/network"
+    assert_includes link_recovery, "vagrant-networkd-runtime-repair.path"
+    assert_includes link_recovery, "chmod 0640"
+    assert_includes link_recovery, 'chown root:systemd-network'
+    assert_includes link_recovery, 'networkctl reconfigure "${PHYSICAL_INTERFACES[@]}"'
+    assert_includes link_recovery, "restore_foreign_policy_rules"
+    assert_includes link_recovery, "/run/vagrant-network-rollback-state"
+    refute_includes link_recovery, "/usr/lib/parallels-tools"
+
+    vagrantfile = File.read(VAGRANTFILE)
+    recovery_block = vagrantfile.match(
+      /config\.vm\.provision "network-link-recovery",.*?path: provision_script\.call\("network-link-recovery\.sh"\)/m
+    )
+    refute_nil recovery_block
+    assert_includes recovery_block[0], 'run: "always"'
 
     docker = provision_source("docker.sh")
     assert_includes docker, "DOCKER-USER"

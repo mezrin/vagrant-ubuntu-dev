@@ -325,6 +325,21 @@ its desktop controls. A VPN client that requires NetworkManager itself to own
 the underlying Ethernet connection is not compatible with this split; use the
 client's standalone service/CLI or adapt the network backend deliberately.
 
+Parallels Tools invokes `prl_nettool restart` when a host network link returns.
+That process uses a restrictive `0077` umask; on Ubuntu 26.04 it can regenerate
+Netplan's runtime `.network` files as root-only even though `systemd-networkd`
+runs as the unprivileged `systemd-network` user. Networkd then cannot read the
+declared configuration, falls back to DHCP, and Adapter 2 loses
+`192.168.56.7` while the guest itself may still have internet access.
+
+The `vagrant-networkd-runtime-repair.path` unit watches the runtime Netplan
+directory without polling. When only the three template-owned generated files
+become unreadable, its service changes them to `root:systemd-network` mode
+`0640`, reloads networkd, and reconfigures only the three physical NICs. It
+preserves non-built-in IPv4/IPv6 policy rules around that reconfiguration so an
+active VPN's routing policy is not intentionally discarded. The helper does not
+edit Parallels-owned scripts or permanent administrator-owned network files.
+
 Immediately before Netplan reconciles the physical adapters, the network
 provisioner snapshots all non-built-in IPv4 and IPv6 policy rules. It restores
 them immediately after Netplan finishes and does the same during automatic
@@ -652,6 +667,7 @@ Provisioners execute in this order:
 | `os-package-security-baseline` | root | Install the combined Ubuntu package set, apply security updates, and always restore automatic-update services |
 | `development-kernel-limits` | root | Persist and immediately apply file-watcher capacity for large development workspaces |
 | `network-security` | root, every provisioning-enabled up/reload | Reconcile Netplan routes and UFW rules |
+| `network-link-recovery` | root, every provisioning-enabled up/reload | Arm event-driven recovery after Parallels regenerates Netplan files with unreadable permissions |
 | `enlarge-hdd` | root, every provisioning-enabled up/reload | Reconcile partition, LVM, and filesystem growth while preserving existing free VG extents |
 | `ubuntu-desktop` | root | Enable the graphical login and graphical boot target |
 | `general-dev-user` | `vagrant` | Configure Git and the GitHub SSH identity path |
@@ -723,6 +739,12 @@ an offline or permanently available build. No local artifact mirror is provided.
   adapter identification ambiguous and stop network provisioning.
 - **Provider Netplan is replaced.** Manual guest Netplan edits are not durable;
   change the template instead.
+- **Parallels link recovery depends on generated Netplan names.** The recovery
+  service owns only the three `10-netplan-vagrant-*.network` runtime files. If
+  their IDs change in the managed YAML, update the recovery inventory and tests
+  in the same change. A future Parallels/Netplan release may make the permission
+  workaround unnecessary, but leaving it armed is harmless when modes are
+  already correct.
 - **Bridged address uses DHCP.** The host-only address is stable, but the LAN
   address may change as Wi-Fi networks or DHCP leases change.
 - **VPN behavior is client-specific.** The template permits returned traffic on
@@ -782,6 +804,35 @@ vagrant reload
 ```
 
 Use the device associated with Wi-Fi; `en1` is only an example.
+
+### Guest internet works but host SSH disappears after a link outage
+
+This symptom can mean Adapter 2 accepted Parallels DHCP instead of retaining
+`192.168.56.7`. The event-driven recovery normally repairs it within a few
+seconds. Check from the host without depending on guest networking:
+
+```sh
+prlctl exec dev-07 ip -brief address
+prlctl exec dev-07 systemctl status vagrant-networkd-runtime-repair.path
+prlctl exec dev-07 journalctl -u vagrant-networkd-runtime-repair.service --since '-10 minutes'
+ping 192.168.56.7
+```
+
+Adapter 2 should show `192.168.56.7/24`, and the path unit should be active. If
+the unit is installed but a one-time recovery failed, retry it through
+Parallels Tools and then verify TCP port 22:
+
+```sh
+prlctl exec dev-07 systemctl start vagrant-networkd-runtime-repair.service
+nc -vz 192.168.56.7 22
+```
+
+After SSH returns, reconcile the permanent definitions and run the live checks:
+
+```sh
+vagrant provision dev-07 --provision-with network-security,network-link-recovery
+vagrant provision dev-07 --provision-with integration-test
+```
 
 ### SSH or VS Code stops working when VPN connects
 

@@ -105,6 +105,22 @@ ipv6_defaults_have_metric "$BRIDGED_INTERFACE" "$BRIDGED_ROUTE_METRIC"
 [ ! -e /run/vagrant-network-rollback-state ]
 pass "network roles and IPv4/IPv6 route policy"
 
+# Parallels Tools may regenerate these files after a host link flap. Confirm
+# networkd can read them and that the event-driven repair unit is armed.
+for NETWORK_FILE in \
+  /run/systemd/network/10-netplan-vagrant-shared.network \
+  /run/systemd/network/10-netplan-vagrant-private.network \
+  /run/systemd/network/10-netplan-vagrant-bridged.network; do
+  [ "$(stat --format='%a %U %G' "$NETWORK_FILE")" = \
+    "640 root systemd-network" ]
+done
+systemctl is-enabled --quiet vagrant-networkd-runtime-repair.service
+systemctl is-enabled --quiet vagrant-networkd-runtime-repair.path
+systemctl is-active --quiet vagrant-networkd-runtime-repair.path
+! systemctl is-failed --quiet vagrant-networkd-runtime-repair.service
+[ -x /usr/local/sbin/vagrant-networkd-runtime-repair ]
+pass "Parallels link-reset recovery is armed"
+
 # UFW must be active and expose the expected template-tagged policy.
 UFW_STATUS="$(ufw status verbose)"
 grep --quiet '^Status: active$' <<< "$UFW_STATUS"

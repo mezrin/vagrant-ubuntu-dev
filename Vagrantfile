@@ -292,7 +292,7 @@ Vagrant.configure("2") do |config|
   PROVISION_DIRECTORY = File.expand_path("provision/ubuntu-26.04", __dir__)
   PROVISION_SCRIPTS = %w[
     os-package-security-baseline.sh development-kernel-limits.sh
-    network-security.sh enlarge-hdd.sh
+    network-security.sh network-link-recovery.sh enlarge-hdd.sh
     ubuntu-desktop.sh general-dev-user.sh github-cli.sh docker.sh rust-for-substrate.sh
     python-uv.sh python.sh python-user.sh nodejs.sh postgresql.sh mongodb.sh
     nginx.sh
@@ -735,6 +735,16 @@ Vagrant.configure("2") do |config|
                         "PRIVATE_NETWORK_TCP_PORTS" => PRIVATE_NETWORK_TCP_PORTS.join(" "),
                         "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" ")
                       }
+
+  # Parallels Tools reapplies Netplan when a host network link returns. Its
+  # restrictive umask can make generated networkd files unreadable by Ubuntu's
+  # unprivileged networkd process, so monitor and repair that precise runtime
+  # failure after the declarative network has been installed.
+  config.vm.provision "network-link-recovery",
+                      type: "shell",
+                      privileged: true,
+                      run: "always",
+                      path: provision_script.call("network-link-recovery.sh")
 
   # Consume host-side disk growth inside the guest. Running on every normal up
   # lets a later increase to the configured Parallels disk size be reconciled.
