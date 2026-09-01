@@ -168,6 +168,10 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes network, "dhcp6: false"
     assert_includes network, "accept-ra: false"
     assert_includes network, "link-local: []"
+    assert_includes network, 'SHARED_DNS_SERVERS'
+    assert_operator network.scan("use-dns: false").length, :>=, 2
+    assert_includes network, 'SHARED_DNS_YAML'
+    assert_includes network, "bridged_ipv4_state_is_valid"
     assert_includes network, "/var/lib/vagrant/network-transactions"
     assert_includes network, "UFW_SNAPSHOT"
     assert_includes network, "trap rollback_on_exit EXIT"
@@ -185,6 +189,13 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes link_recovery, 'chown root:systemd-network'
     assert_includes link_recovery, 'networkctl reconfigure "${PHYSICAL_INTERFACES[@]}"'
     assert_includes link_recovery, "restore_foreign_policy_rules"
+    assert_includes link_recovery, "ManageForeignRoutingPolicyRules=no"
+    assert_includes link_recovery, "systemctl restart systemd-networkd"
+    assert_includes link_recovery, "foreign-policy-rules-config.sha256"
+    assert_includes link_recovery, 'PROVIDER_NETPLAN_FILE="/etc/netplan/50-vagrant.yaml"'
+    assert_includes link_recovery, "netplan generate"
+    assert_includes link_recovery, "10-netplan-eth1.network"
+    assert_includes link_recovery, "ReadWritePaths=/etc/netplan"
     assert_includes link_recovery, "/run/vagrant-network-rollback-state"
     refute_includes link_recovery, "/usr/lib/parallels-tools"
 
@@ -203,6 +214,8 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes docker, '"Hard": $DOCKER_DEFAULT_NOFILE_LIMIT'
     assert_includes docker, '--in-interface "$SHARED_INTERFACE" --jump DROP'
     assert_includes docker, '--in-interface "$BRIDGED_INTERFACE" --jump DROP'
+    assert_includes docker, 'mapfile -t PHYSICAL_INTERFACES'
+    assert_includes docker, 'vagrant-networkd-runtime-repair.service'
     assert_includes docker, "vagrant-docker-ingress.service"
     assert_includes docker, "for (field_index = 1; field_index <= NF; field_index++)"
     refute_includes docker, "for (index = 1; index <= NF; index++)"
@@ -350,6 +363,8 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes source, "pg_isready --quiet"
     assert_includes source, "/run/secrets/mongodb/verify.js"
     assert_includes source, 'pass "pinned GitHub CLI"'
+    assert_includes source,
+                    'pass "active Happ tunnel selects its policy-routing table"'
     assert_includes source, 'daemon_config["default-ulimits"]["nofile"]'
     assert_includes source, 'MONGODB_NOFILE_LIMIT:$MONGODB_NOFILE_LIMIT'
     assert_includes source, '"https://$NGINX_PROBE_SERVER_NAME/"'

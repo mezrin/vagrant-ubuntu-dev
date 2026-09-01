@@ -171,6 +171,11 @@ timers, persistent file-watcher capacity, the pinned GitHub CLI, LVM state,
 exact PostgreSQL and MongoDB behavior, and local Nginx HTTP/TLS responses. It
 changes no guest configuration or application data.
 
+When Happ's default `tun0` and table `2022` are active, the live suite also
+requires ordinary IPv4 route selection to use that table. This catches the
+dangerous half-connected state where the tunnel device exists but its policy
+rules were removed and traffic silently follows a physical default route.
+
 Like every successful provisioning action, an integration-test run is followed
 by the conditional reboot check. If Ubuntu already has
 `/run/reboot-required`, Vagrant reboots the guest after the checks pass.
@@ -306,12 +311,27 @@ route or VPN changes.
 
 | Adapter | Parallels mode | Addressing | Purpose | Default route |
 | --- | --- | --- | --- | --- |
-| 1 | Shared/NAT | DHCPv4, DHCPv6, and IPv6 RA | Vagrant SSH and fallback internet access | IPv4/IPv6 metric 600 |
+| 1 | Shared/NAT | DHCPv4, DHCPv6, IPv6 RA, and fixed fallback DNS | Vagrant SSH and fallback internet access | IPv4/IPv6 metric 600 |
 | 2 | Host-only | Static IPv4; IPv6 disabled | Stable host access at `192.168.56.7` | None |
 | 3 | Bridged Wi-Fi | DHCPv4, DHCPv6, and IPv6 RA | Normal application internet access | IPv4/IPv6 metric 100 |
 
 The lower metric makes Bridged Wi-Fi the preferred IPv4 and IPv6 default route.
 Shared/NAT remains available as a fallback and as Vagrant's management path.
+Adapter 1 uses the public DNS servers declared by
+`SHARED_NETWORK_DNS_SERVERS` instead of Parallels' DHCP-advertised DNS proxy.
+After macOS changes Wi-Fi networks, that proxy can remain unresponsive even
+after Shared/NAT resumes forwarding TCP traffic. The fixed resolvers avoid that
+failure. They also mean local-only DNS zones supplied by the current LAN are
+not resolved through Adapter 1; add the required trusted resolver to the Config
+section if the guest must use such a zone. A connected full-tunnel VPN remains
+responsible for routing and DNS policy while its tunnel is active.
+Adapter 3 is optional at reconciliation time: if the current access point does
+not lease an address to the guest's bridged MAC, provisioning accepts the link
+only when it has no stale IPv4 default route. Shared/NAT then carries internet
+traffic until a later link event obtains a bridged lease. Docker's independent
+ingress firewall identifies Adapter 3 by physical-interface inventory rather
+than requiring that optional route, so published-container protection still
+starts in this fallback state.
 The host-only adapter deliberately has no default route and disables IPv6 so it
 cannot acquire an unintended router-advertisement route. A network may provide
 IPv4 only; DHCPv6 is optional, and any IPv6 route that is learned from DHCPv6 or
@@ -333,12 +353,30 @@ declared configuration, falls back to DHCP, and Adapter 2 loses
 `192.168.56.7` while the guest itself may still have internet access.
 
 The `vagrant-networkd-runtime-repair.path` unit watches the runtime Netplan
-directory without polling. When only the three template-owned generated files
-become unreadable, its service changes them to `root:systemd-network` mode
-`0640`, reloads networkd, and reconfigures only the three physical NICs. It
-preserves non-built-in IPv4/IPv6 policy rules around that reconfiguration so an
-active VPN's routing policy is not intentionally discarded. The helper does not
-edit Parallels-owned scripts or permanent administrator-owned network files.
+directory without polling. After a provider reset, Vagrant can recreate
+`/etc/netplan/50-vagrant.yaml`; its name-matched definitions compete with this
+template and re-enable IPv6 on the host-only adapter. The recovery service
+removes that one exact provider-generated file, regenerates runtime units from
+`99-vagrant-network.yaml`, changes the three template-owned files to
+`root:systemd-network` mode `0640`, reloads networkd, and reconfigures only the
+three physical NICs. It
+sets networkd's native `ManageForeignRoutingPolicyRules=no` policy before any
+reconfiguration, preventing Netplan/networkd from deleting Happ's dynamic
+priority `9000–9010` rules. A snapshot/restore guard provides a second layer
+around the helper's own reconfiguration. The helper does not edit
+Parallels-owned scripts or any other administrator-owned network file. All
+Netplan YAML is declaratively owned by this template; do not store manual
+configuration in `50-vagrant.yaml`. The hardened service grants its helper
+write access to `/etc/netplan` only; the rest of `/etc` remains read-only in
+that unit's mount namespace.
+
+`ManageForeignRoutingPolicyRules` is a manager setting that networkd reads when
+its process starts; `networkctl reload` cannot activate it. The provisioner
+therefore performs one controlled networkd restart when the policy file's
+digest changes or its activation marker is missing. It snapshots and restores
+application-owned IPv4 and IPv6 rules around that restart, and writes the
+marker only after both steps succeed. Later `vagrant up` and `vagrant
+provision` runs see the matching marker and do not restart networkd.
 
 Immediately before Netplan reconciles the physical adapters, the network
 provisioner snapshots all non-built-in IPv4 and IPv6 policy rules. It restores
@@ -805,6 +843,18 @@ vagrant reload
 
 Use the device associated with Wi-Fi; `en1` is only an example.
 
+If the Wi-Fi access point does not issue a lease to the guest's bridged MAC,
+Adapter 3 remains without an IPv4 address. Adapter 1 should still provide
+fallback internet access. Confirm its route and configured resolvers with:
+
+```sh
+vagrant ssh dev-07 -c 'ip -4 route; resolvectl status eth0'
+```
+
+The expected fallback is a metric-600 default route through `10.211.55.1` and
+the DNS servers from `SHARED_NETWORK_DNS_SERVERS`. The exact Shared guest
+address may change.
+
 ### Guest internet works but host SSH disappears after a link outage
 
 This symptom can mean Adapter 2 accepted Parallels DHCP instead of retaining
@@ -868,9 +918,11 @@ vagrant provision dev-07 --provision-with network-security
 ```
 
 While Happ is connected, its default strict-route configuration also installs
-priority `9000` policy rules. If `tun0` exists but those rules are missing, an
-older provisioning run has already removed them; disconnect and reconnect Happ
-once. Future network provisioning snapshots and restores the active rules.
+priority `9000–9010` policy rules. If `tun0` exists but those rules are missing,
+ordinary traffic bypasses the tunnel even though Happ appears connected.
+Disconnect and reconnect Happ once to recreate them. The template configures
+networkd to preserve application-owned policy rules across subsequent Netplan
+and Parallels recovery reconfiguration.
 
 Happ 3.3.6 currently gives this guest's `tun0` an IPv4 address only and installs
 an IPv6 `unreachable` rule while strict routing is enabled. Consequently,

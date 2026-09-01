@@ -107,6 +107,11 @@ Vagrant.configure("2") do |config|
   BRIDGED_NETWORK_INTERFACE = ENV.fetch("VAGRANT_BRIDGED_INTERFACE", "en0")
   BRIDGED_NETWORK_ROUTE_METRIC = 100
   SHARED_NETWORK_ROUTE_METRIC = 600
+  # Parallels normally advertises its Shared gateway as a DNS proxy. That
+  # proxy can remain unreachable after macOS changes Wi-Fi networks even when
+  # Shared/NAT itself already forwards traffic again. Use direct public DNS on
+  # Adapter 1 so the fallback path does not depend on that stale proxy.
+  SHARED_NETWORK_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"].freeze
   PRIVATE_NETWORK_TCP_PORTS = [
     "22", "80", "443", "3000", "9944",
     "15100:15105", "15200:15205", "15300:15305", "15400:15405",
@@ -285,7 +290,7 @@ Vagrant.configure("2") do |config|
   # capacity on the host. The storage workflow can grow but never shrink a disk.
   PARALLELS_RESOURCES_HDD_SIZE = "1000G"
   RESOURCES_CPUS = 8
-  RESOURCES_MEMORY = 50000
+  RESOURCES_MEMORY = 60000
 
   # Keep provisioner logic outside this Ruby file so shell syntax can be tested
   # independently. This inventory must match every referenced executable script.
@@ -355,6 +360,16 @@ Vagrant.configure("2") do |config|
                 "SHARED_NETWORK_ROUTE_METRIC must be a positive integer")
   validate.call(BRIDGED_NETWORK_ROUTE_METRIC < SHARED_NETWORK_ROUTE_METRIC,
                 "the Bridged route metric must be lower than the Shared metric")
+  begin
+    shared_dns_addresses = SHARED_NETWORK_DNS_SERVERS.map { |value| IPAddr.new(value) }
+    validate.call(!shared_dns_addresses.empty? &&
+                  SHARED_NETWORK_DNS_SERVERS.uniq == SHARED_NETWORK_DNS_SERVERS &&
+                  shared_dns_addresses.all?(&:ipv4?),
+                  "SHARED_NETWORK_DNS_SERVERS must contain unique IPv4 addresses")
+  rescue IPAddr::InvalidAddressError, TypeError
+    configuration_errors <<
+      "SHARED_NETWORK_DNS_SERVERS must contain unique IPv4 addresses"
+  end
   validate.call(NGINX_BRIDGED_INGRESS == true || NGINX_BRIDGED_INGRESS == false,
                 "NGINX_BRIDGED_INGRESS must be true or false")
 
@@ -670,6 +685,20 @@ Vagrant.configure("2") do |config|
     # An update can add several minutes and may restart the VM during first boot.
     prl.update_guest_tools = true
 
+    # Treat the Mac as the guest's clock authority. Parallels "smart mode"
+    # preserves the existing host/guest time difference; after a long sleep,
+    # suspend, or stale virtual-RTC boot, that can leave the guest a day behind
+    # and break TLS certificate validation and Git commit timestamps. Disable
+    # offset preservation so Tools corrects UTC every 60 seconds. Keep timezone
+    # synchronization disabled because the guest may intentionally use a zone
+    # different from macOS; timezone display does not affect absolute time.
+    prl.customize ["set",
+                   :id,
+                   "--time-sync", "on",
+                   "--time-sync-smart-mode", "off",
+                   "--disable-timezone-sync", "on",
+                   "--time-sync-interval", "60"]
+
     # Provider values are CPU count and memory in mebibytes (MiB).
     prl.cpus = RESOURCES_CPUS
     prl.memory = RESOURCES_MEMORY
@@ -731,6 +760,7 @@ Vagrant.configure("2") do |config|
                         "PRIVATE_NETWORK_CIDR" => PRIVATE_NETWORK_CIDR,
                         "BRIDGED_ROUTE_METRIC" => BRIDGED_NETWORK_ROUTE_METRIC.to_s,
                         "SHARED_ROUTE_METRIC" => SHARED_NETWORK_ROUTE_METRIC.to_s,
+                        "SHARED_DNS_SERVERS" => SHARED_NETWORK_DNS_SERVERS.join(" "),
                         "NGINX_BRIDGED_INGRESS" => NGINX_BRIDGED_INGRESS.to_s,
                         "PRIVATE_NETWORK_TCP_PORTS" => PRIVATE_NETWORK_TCP_PORTS.join(" "),
                         "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" ")
@@ -970,6 +1000,7 @@ Vagrant.configure("2") do |config|
                         "PRIVATE_NETWORK_CIDR" => PRIVATE_NETWORK_CIDR,
                         "BRIDGED_ROUTE_METRIC" => BRIDGED_NETWORK_ROUTE_METRIC.to_s,
                         "SHARED_ROUTE_METRIC" => SHARED_NETWORK_ROUTE_METRIC.to_s,
+                        "SHARED_DNS_SERVERS" => SHARED_NETWORK_DNS_SERVERS.join(" "),
                         "TRUSTED_VPN_TUNNEL_INTERFACES" => TRUSTED_VPN_TUNNEL_INTERFACES.join(" "),
                         "INOTIFY_MAX_USER_WATCHES" => INOTIFY_MAX_USER_WATCHES.to_s,
                         "INOTIFY_MAX_USER_INSTANCES" => INOTIFY_MAX_USER_INSTANCES.to_s,

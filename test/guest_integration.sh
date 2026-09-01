@@ -8,7 +8,7 @@ set -Eeuo pipefail
 
 for VARIABLE in \
   PRIVATE_NETWORK_IP PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC \
-  SHARED_ROUTE_METRIC TRUSTED_VPN_TUNNEL_INTERFACES \
+  SHARED_ROUTE_METRIC SHARED_DNS_SERVERS TRUSTED_VPN_TUNNEL_INTERFACES \
   INOTIFY_MAX_USER_WATCHES INOTIFY_MAX_USER_INSTANCES \
   GITHUB_CLI_ENABLED GITHUB_CLI_VERSION \
   DOCKER_ENABLED DOCKER_DEFAULT_NOFILE_LIMIT \
@@ -83,9 +83,28 @@ PRIVATE_INTERFACE="$(
     '$4 ~ ("^" address "/") { print $2 }'
 )"
 SHARED_INTERFACE="$(interface_for_default_metric "$SHARED_ROUTE_METRIC")"
-BRIDGED_INTERFACE="$(interface_for_default_metric "$BRIDGED_ROUTE_METRIC")"
 require_one_line "Private interface" "$PRIVATE_INTERFACE"
 require_one_line "Shared interface" "$SHARED_INTERFACE"
+
+# Adapter 3 may have no DHCP lease on Wi-Fi networks that reject a second
+# bridged MAC. Identify it as the one remaining physical NIC instead of making
+# its optional default route a prerequisite for the entire integration suite.
+mapfile -t PHYSICAL_INTERFACES < <(
+  for INTERFACE_PATH in /sys/class/net/*; do
+    [ -e "$INTERFACE_PATH/device" ] || continue
+    basename "$INTERFACE_PATH"
+  done | sort
+)
+mapfile -t BRIDGED_INTERFACES < <(
+  printf '%s\n' "${PHYSICAL_INTERFACES[@]}" | \
+    awk -v private="$PRIVATE_INTERFACE" -v shared="$SHARED_INTERFACE" \
+      '$0 != private && $0 != shared'
+)
+if [ "${#BRIDGED_INTERFACES[@]}" -ne 1 ]; then
+  echo "Bridged interface must be the one remaining physical NIC." >&2
+  exit 1
+fi
+BRIDGED_INTERFACE="${BRIDGED_INTERFACES[0]}"
 require_one_line "Bridged interface" "$BRIDGED_INTERFACE"
 if [ "$PRIVATE_INTERFACE" = "$SHARED_INTERFACE" ] || \
    [ "$PRIVATE_INTERFACE" = "$BRIDGED_INTERFACE" ] || \
@@ -95,14 +114,29 @@ if [ "$PRIVATE_INTERFACE" = "$SHARED_INTERFACE" ] || \
 fi
 ip -4 route show default dev "$SHARED_INTERFACE" | \
   grep --quiet "metric $SHARED_ROUTE_METRIC"
-ip -4 route show default dev "$BRIDGED_INTERFACE" | \
-  grep --quiet "metric $BRIDGED_ROUTE_METRIC"
+if ip -o -4 address show dev "$BRIDGED_INTERFACE" scope global | \
+     grep --quiet .; then
+  ip -4 route show default dev "$BRIDGED_INTERFACE" | \
+    grep --quiet "metric $BRIDGED_ROUTE_METRIC"
+else
+  ! ip -4 route show default dev "$BRIDGED_INTERFACE" | grep --quiet .
+fi
 ipv6_defaults_have_metric "$SHARED_INTERFACE" "$SHARED_ROUTE_METRIC"
 ipv6_defaults_have_metric "$BRIDGED_INTERFACE" "$BRIDGED_ROUTE_METRIC"
 ! ip -6 route show default dev "$PRIVATE_INTERFACE" | grep --quiet .
 ! ip -o -6 address show dev "$PRIVATE_INTERFACE" scope global | grep --quiet .
 [ -f /etc/netplan/99-vagrant-network.yaml ]
+[ ! -e /etc/netplan/50-vagrant.yaml ]
+[ ! -e /run/systemd/network/10-netplan-eth1.network ]
+[ ! -e /run/systemd/network/10-netplan-eth2.network ]
 [ ! -e /run/vagrant-network-rollback-state ]
+read -r -a SHARED_DNS_SERVER_LIST <<< "$SHARED_DNS_SERVERS"
+for DNS_SERVER in "${SHARED_DNS_SERVER_LIST[@]}"; do
+  grep --fixed-strings --quiet -- "- \"$DNS_SERVER\"" \
+    /etc/netplan/99-vagrant-network.yaml
+  resolvectl dns "$SHARED_INTERFACE" | \
+    grep --fixed-strings --quiet "$DNS_SERVER"
+done
 pass "network roles and IPv4/IPv6 route policy"
 
 # Parallels Tools may regenerate these files after a host link flap. Confirm
@@ -119,7 +153,36 @@ systemctl is-enabled --quiet vagrant-networkd-runtime-repair.path
 systemctl is-active --quiet vagrant-networkd-runtime-repair.path
 ! systemctl is-failed --quiet vagrant-networkd-runtime-repair.service
 [ -x /usr/local/sbin/vagrant-networkd-runtime-repair ]
+grep --fixed-strings --line-regexp --quiet \
+  'ManageForeignRoutingPolicyRules=no' \
+  /etc/systemd/networkd.conf.d/50-vagrant-preserve-foreign-policy-rules.conf
+[ "$(
+  sha256sum \
+    /etc/systemd/networkd.conf.d/50-vagrant-preserve-foreign-policy-rules.conf |
+    awk '{ print $1 }'
+)" = "$(
+  tr -d '[:space:]' < \
+    /var/lib/vagrant/network/foreign-policy-rules-config.sha256
+)" ]
+systemd-analyze cat-config systemd/networkd.conf | awk -F= '
+  /^[[:space:]]*ManageForeignRoutingPolicyRules=/ {
+    gsub(/[[:space:]]/, "", $2)
+    value = $2
+  }
+  END { exit(value == "no" ? 0 : 1) }
+'
 pass "Parallels link-reset recovery is armed"
+
+# When Happ's default tunnel is present and advertises its routing table, the
+# corresponding rules must actually select that table for ordinary IPv4. A TUN
+# device alone is not proof of protection: networkd can otherwise leave the app
+# looking connected while normal traffic follows the physical default route.
+if ip link show tun0 > /dev/null 2>&1 && \
+   ip -4 route show table 2022 | grep --quiet '^default .* dev tun0'; then
+  ip -4 rule show | grep --quiet 'lookup 2022'
+  ip -4 route get 1.1.1.1 | grep --quiet 'dev tun0 table 2022'
+  pass "active Happ tunnel selects its policy-routing table"
+fi
 
 # UFW must be active and expose the expected template-tagged policy.
 UFW_STATUS="$(ufw status verbose)"

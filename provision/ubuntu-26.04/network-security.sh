@@ -4,9 +4,9 @@ set -Eeuo pipefail
 # Purpose: declaratively reconcile the guest's three NICs, IPv4/IPv6 route
 # priority, and interface-scoped UFW rules. Runs as root on every Vagrant
 # up/reload.
-# Inputs: private address/CIDR, route metrics, Nginx exposure flag, allowed
-# host-only TCP ports, and trusted VPN tunnel interface names. See README.md for
-# the full traffic model.
+# Inputs: private address/CIDR, route metrics, Shared/NAT fallback DNS servers,
+# Nginx exposure flag, allowed host-only TCP ports, and trusted VPN tunnel
+# interface names. See README.md for the full traffic model.
 # Safety model: identify adapters from live facts, take a per-run snapshot of
 # Netplan and UFW, schedule an automatic rollback, apply, then cancel rollback
 # only after address, route, and firewall checks pass. Manual Netplan and
@@ -18,6 +18,7 @@ set -Eeuo pipefail
 : "${PRIVATE_NETWORK_CIDR:?}"
 : "${BRIDGED_ROUTE_METRIC:?}"
 : "${SHARED_ROUTE_METRIC:?}"
+: "${SHARED_DNS_SERVERS:?}"
 : "${NGINX_BRIDGED_INGRESS:?}"
 : "${PRIVATE_NETWORK_TCP_PORTS:?}"
 : "${TRUSTED_VPN_TUNNEL_INTERFACES:?}"
@@ -36,6 +37,33 @@ for VPN_INTERFACE in "${VPN_TUNNEL_INTERFACES[@]}"; do
     exit 1
   fi
 done
+
+# DNS values become YAML below, so validate each octet before constructing the
+# document. Direct public resolvers are deliberate: Parallels' Shared gateway
+# can resume forwarding after a host Wi-Fi change while its DNS proxy remains
+# stale. Keeping this policy on Adapter 1 gives the guest a working fallback
+# when the preferred bridged adapter has not yet obtained DHCP.
+read -r -a SHARED_DNS_SERVER_LIST <<< "$SHARED_DNS_SERVERS"
+if [ "${#SHARED_DNS_SERVER_LIST[@]}" -eq 0 ]; then
+  echo "At least one Shared/NAT DNS server is required." >&2
+  exit 1
+fi
+for DNS_SERVER in "${SHARED_DNS_SERVER_LIST[@]}"; do
+  if [[ ! "$DNS_SERVER" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "Invalid Shared/NAT IPv4 DNS server: $DNS_SERVER" >&2
+    exit 1
+  fi
+  IFS=. read -r -a DNS_OCTETS <<< "$DNS_SERVER"
+  for DNS_OCTET in "${DNS_OCTETS[@]}"; do
+    if [ "$DNS_OCTET" -gt 255 ]; then
+      echo "Invalid Shared/NAT IPv4 DNS server: $DNS_SERVER" >&2
+      exit 1
+    fi
+  done
+done
+SHARED_DNS_YAML="$(
+  printf '          - "%s"\n' "${SHARED_DNS_SERVER_LIST[@]}"
+)"
 
 # The managed file is the only Netplan YAML source left after a successful run.
 # Each attempt gets an exact, short-lived snapshot of the immediately preceding
@@ -411,10 +439,15 @@ network:
       dhcp4: true
       dhcp6: true
       accept-ra: true
+      nameservers:
+        addresses:
+$SHARED_DNS_YAML
       dhcp4-overrides:
         route-metric: $SHARED_ROUTE_METRIC
+        use-dns: false
       dhcp6-overrides:
         route-metric: $SHARED_ROUTE_METRIC
+        use-dns: false
       optional-addresses:
         - dhcp6
     vagrant-private:
@@ -524,9 +557,24 @@ ipv6_default_routes_have_metric() {
   done < <(ip -6 route show default dev "$interface")
 }
 
+# Adapter 3 is intentionally optional because some Wi-Fi networks refuse DHCP
+# to a second bridged MAC. When it has an IPv4 lease, require its preferred
+# metric. When it has no lease, require that it contributes no stale default
+# route and allow Shared/NAT to carry fallback traffic.
+bridged_ipv4_state_is_valid() {
+  if ip -o -4 address show dev "$BRIDGED_INTERFACE" scope global | \
+       grep --quiet .; then
+    ip -4 route show default dev "$BRIDGED_INTERFACE" | \
+      grep --quiet "metric $BRIDGED_ROUTE_METRIC"
+  else
+    ! ip -4 route show default dev "$BRIDGED_INTERFACE" | grep --quiet .
+  fi
+}
+
 # Confirm all invariants that matter to continued operation: private address,
-# management SSH route, preferred/fallback IPv4 routes, equivalent IPv6 route
-# metrics when IPv6 is available, and no IPv6 route on the host-only adapter.
+# management SSH route, the required Shared fallback, the optional Bridged
+# route, equivalent IPv6 route metrics when IPv6 is available, and no IPv6
+# route on the host-only adapter.
 network_ready=false
 for _ in $(seq 1 30); do
   if ip -o -4 address show dev "$PRIVATE_INTERFACE" | \
@@ -535,8 +583,7 @@ for _ in $(seq 1 30); do
        grep --quiet "dev $SHARED_INTERFACE" && \
      ip -4 route show default dev "$SHARED_INTERFACE" | \
        grep --quiet "metric $SHARED_ROUTE_METRIC" && \
-     ip -4 route show default dev "$BRIDGED_INTERFACE" | \
-       grep --quiet "metric $BRIDGED_ROUTE_METRIC" && \
+     bridged_ipv4_state_is_valid && \
      ipv6_default_routes_have_metric \
        "$SHARED_INTERFACE" "$SHARED_ROUTE_METRIC" && \
      ipv6_default_routes_have_metric \

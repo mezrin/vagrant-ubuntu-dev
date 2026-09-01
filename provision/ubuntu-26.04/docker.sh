@@ -187,8 +187,10 @@ cat > /usr/local/sbin/vagrant-docker-ingress <<'FIREWALL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# The network provisioner owns interface configuration. Resolve roles from live
-# addresses and route metrics each time Docker starts so kernel names may change.
+# The network provisioner owns interface configuration. Resolve Private and
+# Shared from live addresses/routes each time Docker starts, then identify
+# Bridged as the one remaining physical NIC. Adapter 3 is allowed to lack a
+# DHCP route on Wi-Fi networks that refuse a second bridged MAC.
 : "${PRIVATE_NETWORK_IP:?}"
 : "${PRIVATE_NETWORK_CIDR:?}"
 : "${BRIDGED_ROUTE_METRIC:?}"
@@ -215,7 +217,27 @@ interface_for_default_metric() {
 }
 
 SHARED_INTERFACE="$(interface_for_default_metric "$SHARED_ROUTE_METRIC")"
-BRIDGED_INTERFACE="$(interface_for_default_metric "$BRIDGED_ROUTE_METRIC")"
+
+mapfile -t PHYSICAL_INTERFACES < <(
+  for INTERFACE_PATH in /sys/class/net/*; do
+    [ -e "$INTERFACE_PATH/device" ] || continue
+    basename "$INTERFACE_PATH"
+  done | sort
+)
+if [ "${#PHYSICAL_INTERFACES[@]}" -ne 3 ]; then
+  echo "Expected three physical interfaces for Docker ingress policy." >&2
+  exit 1
+fi
+mapfile -t BRIDGED_INTERFACES < <(
+  printf '%s\n' "${PHYSICAL_INTERFACES[@]}" | \
+    awk -v private="$PRIVATE_INTERFACE" -v shared="$SHARED_INTERFACE" \
+      '$0 != private && $0 != shared'
+)
+if [ "${#BRIDGED_INTERFACES[@]}" -ne 1 ]; then
+  echo "Bridged network role does not resolve to one remaining physical interface." >&2
+  exit 1
+fi
+BRIDGED_INTERFACE="${BRIDGED_INTERFACES[0]}"
 
 for ROLE_AND_INTERFACE in \
   "Private:$PRIVATE_INTERFACE" \
@@ -294,7 +316,8 @@ cat > /etc/systemd/system/vagrant-docker-ingress.service <<'UNIT'
 [Unit]
 Description=Apply Vagrant Docker ingress policy
 Requires=docker.service
-After=docker.service network-online.target
+Wants=vagrant-networkd-runtime-repair.service
+After=docker.service network-online.target vagrant-networkd-runtime-repair.service
 PartOf=docker.service
 
 [Service]
