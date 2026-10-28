@@ -18,6 +18,10 @@ done
 
 export DEBIAN_FRONTEND=noninteractive
 POSTGRESQL_PACKAGE="postgresql-$POSTGRESQL_MAJOR_VERSION"
+# The server package depends on exactly the same client version. Pin and install
+# both, otherwise apt picks PGDG's newest client once the repository moves past
+# the pinned release and the server dependency becomes unsatisfiable.
+POSTGRESQL_CLIENT_PACKAGE="postgresql-client-$POSTGRESQL_MAJOR_VERSION"
 
 case "$POSTGRESQL_ALLOW_PACKAGE_DOWNGRADE" in
   true|false) ;;
@@ -105,7 +109,7 @@ rm -f /etc/apt/sources.list.d/pgdg.list
 # Pin above priority 1000 so apt converges to the reviewed exact version instead
 # of silently selecting the newest repository release.
 cat > /etc/apt/preferences.d/postgresql <<APT_PREFERENCES
-Package: $POSTGRESQL_PACKAGE
+Package: $POSTGRESQL_PACKAGE $POSTGRESQL_CLIENT_PACKAGE
 Pin: version $POSTGRESQL_PACKAGE_VERSION
 Pin-Priority: 1001
 APT_PREFERENCES
@@ -117,7 +121,8 @@ if [ "$POSTGRESQL_ALLOW_PACKAGE_DOWNGRADE" = true ]; then
   APT_DOWNGRADE_ARGUMENTS+=(--allow-downgrades)
 fi
 apt-get install --assume-yes "${APT_DOWNGRADE_ARGUMENTS[@]}" \
-  "$POSTGRESQL_PACKAGE=$POSTGRESQL_PACKAGE_VERSION"
+  "$POSTGRESQL_PACKAGE=$POSTGRESQL_PACKAGE_VERSION" \
+  "$POSTGRESQL_CLIENT_PACKAGE=$POSTGRESQL_PACKAGE_VERSION"
 
 # Check dpkg's installed result independently of apt's return status.
 INSTALLED_POSTGRESQL_VERSION="$(

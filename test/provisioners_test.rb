@@ -355,6 +355,9 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes postgresql, "POSTGRESQL_ALLOW_PACKAGE_DOWNGRADE"
     assert_includes postgresql, "--allow-downgrades"
     assert_includes postgresql, "pg_isready --quiet"
+    assert_includes postgresql,
+                    '"$POSTGRESQL_CLIENT_PACKAGE=$POSTGRESQL_PACKAGE_VERSION"'
+    assert_includes postgresql, "Package: $POSTGRESQL_PACKAGE $POSTGRESQL_CLIENT_PACKAGE"
 
     nginx = provision_source("nginx.sh")
     assert_includes nginx, "/var/lib/vagrant/nginx-transactions"
