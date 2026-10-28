@@ -842,6 +842,7 @@ Vagrant.configure("2") do |config|
                           "DOCKER_COMPOSE_VERSION" => DOCKER_COMPOSE_VERSION,
                           "DOCKER_DEFAULT_NOFILE_LIMIT" => DOCKER_DEFAULT_NOFILE_LIMIT.to_s,
                           "DEFAULT_USER" => DEFAULT_USER,
+                          "DOCKER_INGRESS_POLICY" => "vagrant-adapters",
                           "PRIVATE_NETWORK_IP" => PRIVATE_NETWORK_IP,
                           "PRIVATE_NETWORK_CIDR" => PRIVATE_NETWORK_CIDR,
                           "BRIDGED_ROUTE_METRIC" => BRIDGED_NETWORK_ROUTE_METRIC.to_s,

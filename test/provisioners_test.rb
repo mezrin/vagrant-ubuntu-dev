@@ -219,6 +219,11 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes docker, "vagrant-docker-ingress.service"
     assert_includes docker, "for (field_index = 1; field_index <= NF; field_index++)"
     refute_includes docker, "for (index = 1; index <= NF; index++)"
+    # A public server trusts no physical NIC for container ingress.
+    assert_includes docker, 'DOCKER_INGRESS_POLICY'
+    assert_includes docker, 'public-server) ;;'
+    assert_includes docker, '--in-interface "$INTERFACE" --jump DROP'
+    assert_includes vagrantfile, '"DOCKER_INGRESS_POLICY" => "vagrant-adapters"'
   end
 
   # Assert ordering and state mechanisms that make repeat provisioning safe.

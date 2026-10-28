@@ -4,7 +4,9 @@ set -Eeuo pipefail
 # Purpose: install exact Docker Engine components from Docker's signed Ubuntu
 # repository and configure safe development defaults. Runs as root.
 # Inputs: repository/key metadata, exact package versions, development username,
-# host-only network, and physical-interface route metrics. Repeat behavior:
+# default published-port address, and an ingress policy. `vagrant-adapters`
+# needs the host-only network and physical-interface route metrics;
+# `public-server` treats every physical interface as untrusted. Repeat behavior:
 # files, packages, and Docker's independent ingress policy converge to inputs.
 # Limitation: docker-group membership takes effect in the user's next login;
 # explicitly published ports are still limited by the DOCKER-USER policy below.
@@ -15,9 +17,22 @@ for VARIABLE in \
   DOCKER_APT_KEY_URL DOCKER_APT_REPOSITORY_URL DOCKER_APT_KEY_SHA256 \
   DOCKER_CE_VERSION DOCKER_CONTAINERD_VERSION DOCKER_BUILDX_VERSION \
   DOCKER_COMPOSE_VERSION DOCKER_DEFAULT_NOFILE_LIMIT DEFAULT_USER PRIVATE_NETWORK_IP \
-  PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC SHARED_ROUTE_METRIC; do
+  DOCKER_INGRESS_POLICY; do
   : "${!VARIABLE:?}"
 done
+case "$DOCKER_INGRESS_POLICY" in
+  vagrant-adapters)
+    for VARIABLE in \
+      PRIVATE_NETWORK_CIDR BRIDGED_ROUTE_METRIC SHARED_ROUTE_METRIC; do
+      : "${!VARIABLE:?}"
+    done
+    ;;
+  public-server) ;;
+  *)
+    echo "DOCKER_INGRESS_POLICY must be vagrant-adapters or public-server." >&2
+    exit 1
+    ;;
+esac
 if [[ ! "$DOCKER_DEFAULT_NOFILE_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
   echo "DOCKER_DEFAULT_NOFILE_LIMIT must be a positive integer." >&2
   exit 1
@@ -130,7 +145,8 @@ if ! getent group docker > /dev/null; then
 fi
 usermod -aG docker "$DEFAULT_USER"
 
-# Bind ports that omit an explicit host address to Adapter 2 instead of all NICs.
+# Bind ports that omit an explicit host address to Adapter 2 (Vagrant) or to
+# loopback (public server) instead of all NICs.
 # Build and validate a candidate before atomically replacing the live file. The
 # local log driver bounds storage; non-blocking delivery protects applications.
 install -d -m 0755 /etc/docker
@@ -171,19 +187,86 @@ rm -f "$DOCKER_CONFIG_TEMP"
 trap - EXIT
 
 # Docker inserts published-port rules before packets reach UFW. Enforce the
-# three-adapter trust model in DOCKER-USER, Docker's documented administrator
-# chain: Host-only is allowed from its own subnet, while Shared and Bridged
-# ingress are denied even when a container explicitly publishes on 0.0.0.0.
+# selected trust model in DOCKER-USER, Docker's documented administrator chain.
+# vagrant-adapters: Host-only is allowed from its own subnet, while Shared and
+# Bridged ingress are denied even when a container explicitly publishes on
+# 0.0.0.0. public-server: new ingress from every physical NIC is denied, so
+# containers are reachable only from the host itself (for example through SSH
+# port forwarding).
 install -d -m 0755 /etc/vagrant /usr/local/sbin
-cat > /etc/vagrant/docker-ingress.conf <<CONFIG
+if [ "$DOCKER_INGRESS_POLICY" = vagrant-adapters ]; then
+  cat > /etc/vagrant/docker-ingress.conf <<CONFIG
 PRIVATE_NETWORK_IP=$PRIVATE_NETWORK_IP
 PRIVATE_NETWORK_CIDR=$PRIVATE_NETWORK_CIDR
 BRIDGED_ROUTE_METRIC=$BRIDGED_ROUTE_METRIC
 SHARED_ROUTE_METRIC=$SHARED_ROUTE_METRIC
 CONFIG
+else
+  : > /etc/vagrant/docker-ingress.conf
+fi
 chmod 0600 /etc/vagrant/docker-ingress.conf
 
-cat > /usr/local/sbin/vagrant-docker-ingress <<'FIREWALL'
+write_public_server_ingress_policy() {
+  cat > /usr/local/sbin/vagrant-docker-ingress <<'FIREWALL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# A public server has no trusted network adapter. Deny every new connection
+# that arrives on a physical NIC and would be forwarded to a container, even
+# when a container explicitly publishes on 0.0.0.0. Replies to container-
+# initiated connections and loopback-published ports are unaffected.
+mapfile -t PHYSICAL_INTERFACES < <(
+  for INTERFACE_PATH in /sys/class/net/*; do
+    [ -e "$INTERFACE_PATH/device" ] || continue
+    basename "$INTERFACE_PATH"
+  done | sort
+)
+if [ "${#PHYSICAL_INTERFACES[@]}" -eq 0 ]; then
+  echo "Expected at least one physical interface for Docker ingress policy." >&2
+  exit 1
+fi
+
+reconcile_chain() {
+  local command="$1"
+  local managed_chain="$2"
+
+  "$command" --wait --list DOCKER-USER > /dev/null
+  if ! "$command" --wait --list "$managed_chain" > /dev/null 2>&1; then
+    "$command" --wait --new-chain "$managed_chain"
+  fi
+  while "$command" --wait --check DOCKER-USER --jump "$managed_chain" \
+    > /dev/null 2>&1; do
+    "$command" --wait --delete DOCKER-USER --jump "$managed_chain"
+  done
+  "$command" --wait --flush "$managed_chain"
+  "$command" --wait --insert DOCKER-USER 1 --jump "$managed_chain"
+  "$command" --wait --append "$managed_chain" \
+    --match conntrack --ctstate ESTABLISHED,RELATED --jump RETURN
+}
+
+# Docker may omit its IPv6 administrator chain until IPv6 networking is used.
+if ! ip6tables --wait --list DOCKER-USER > /dev/null 2>&1; then
+  ip6tables --wait --new-chain DOCKER-USER
+fi
+if ! ip6tables --wait --check FORWARD --jump DOCKER-USER > /dev/null 2>&1; then
+  ip6tables --wait --insert FORWARD 1 --jump DOCKER-USER
+fi
+
+for COMMAND in iptables ip6tables; do
+  reconcile_chain "$COMMAND" VAGRANT-DOCKER-INGRESS
+  for INTERFACE in "${PHYSICAL_INTERFACES[@]}"; do
+    "$COMMAND" --wait --append VAGRANT-DOCKER-INGRESS \
+      --in-interface "$INTERFACE" --jump DROP
+  done
+  "$COMMAND" --wait --append VAGRANT-DOCKER-INGRESS --jump RETURN
+  "$COMMAND" --wait --check FORWARD --jump DOCKER-USER
+  "$COMMAND" --wait --check DOCKER-USER --jump VAGRANT-DOCKER-INGRESS
+done
+FIREWALL
+}
+
+write_vagrant_ingress_policy() {
+  cat > /usr/local/sbin/vagrant-docker-ingress <<'FIREWALL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -310,6 +393,13 @@ iptables --wait --check DOCKER-USER --jump VAGRANT-DOCKER-INGRESS
 ip6tables --wait --check FORWARD --jump DOCKER-USER
 ip6tables --wait --check DOCKER-USER --jump VAGRANT-DOCKER-INGRESS
 FIREWALL
+}
+
+if [ "$DOCKER_INGRESS_POLICY" = vagrant-adapters ]; then
+  write_vagrant_ingress_policy
+else
+  write_public_server_ingress_policy
+fi
 chmod 0755 /usr/local/sbin/vagrant-docker-ingress
 
 cat > /etc/systemd/system/vagrant-docker-ingress.service <<'UNIT'
