@@ -3,8 +3,9 @@ set -Eeuo pipefail
 
 # Purpose: install reproducible Rust toolchains for Substrate-style native and
 # WebAssembly development. Runs as the unprivileged development user.
-# Inputs: a verified ARM64 rustup-init archive, one exact stable toolchain, and
-# one dated nightly toolchain. Toolchains live under the user's home directory.
+# Inputs: a verified rustup-init binary for the guest's target triple, one exact
+# stable toolchain, and one dated nightly toolchain. Toolchains live under the
+# user's home directory.
 
 # Validate every Vagrant-supplied input before downloading or changing user files.
 for VARIABLE in \

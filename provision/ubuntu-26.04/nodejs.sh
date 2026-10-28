@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Purpose: install exact NVM, ARM64 Node.js, and Corepack releases for the
+# Purpose: install exact NVM, Node.js, and Corepack releases for the
 # development user without executing remote installer scripts. Runs unprivileged.
-# Inputs: versioned archive URLs and SHA-256 digests for all three components.
+# Inputs: versioned archive URLs and SHA-256 digests for all three components;
+# the Node.js archive must match the guest's architecture (arm64 or x64).
 # Repeat behavior: NVM files converge, an exact Node tree is reused when valid,
 # and Corepack is replaced only when its reported version differs.
 
@@ -65,7 +66,9 @@ if [ ! -x "$NODE_INSTALL_DIRECTORY/bin/node" ] || \
   tar --extract --gzip --file "$NODE_ARCHIVE" --directory "$NODEJS_TEMP_DIRECTORY"
   install -d -m 0755 "$(dirname "$NODE_INSTALL_DIRECTORY")"
   rm -rf "$NODE_INSTALL_DIRECTORY"
-  mv "$NODEJS_TEMP_DIRECTORY/node-$NODE_VERSION-linux-arm64" "$NODE_INSTALL_DIRECTORY"
+  # node-<version>-linux-<arch>.tar.gz unpacks to a directory of the same name.
+  mv "$NODEJS_TEMP_DIRECTORY/$(basename "$NODE_ARCHIVE_URL" .tar.gz)" \
+    "$NODE_INSTALL_DIRECTORY"
 fi
 
 # Make the exact version NVM's default for new shells and select it now so npm's

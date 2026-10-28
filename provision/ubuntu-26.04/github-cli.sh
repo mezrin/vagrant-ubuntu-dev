@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 # Purpose: install GitHub's official `gh` command-line interface system-wide.
 # Runs as root so every guest user resolves the same /usr/local/bin/gh binary.
-# Inputs: an exact release version plus its immutable ARM64 archive URL and
-# SHA-256 digest.
+# Inputs: an exact release version plus its immutable archive URL and SHA-256
+# digest. The archive must match the guest's Debian architecture (amd64/arm64).
 # Repeat behavior: download and verify the configured release, then atomically
 # replace only the `gh` executable. Authentication and tokens remain user-owned.
 
@@ -20,8 +20,12 @@ if [[ ! "$GITHUB_CLI_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "GITHUB_CLI_ARCHIVE_SHA256 must be a lowercase SHA-256 digest." >&2
   exit 1
 fi
-if [ "$(dpkg --print-architecture)" != arm64 ]; then
-  echo "The configured GitHub CLI archive supports only an ARM64 guest." >&2
+# Official release archives are named gh_<version>_linux_<arch>.tar.gz, where
+# <arch> uses Debian's names. The archive's top-level directory repeats that
+# name, so derive it from the URL and reject a version or architecture mismatch.
+GITHUB_CLI_ARCHIVE_ROOT="gh_${GITHUB_CLI_VERSION}_linux_$(dpkg --print-architecture)"
+if [ "$(basename "$GITHUB_CLI_ARCHIVE_URL" .tar.gz)" != "$GITHUB_CLI_ARCHIVE_ROOT" ]; then
+  echo "GITHUB_CLI_ARCHIVE_URL must name $GITHUB_CLI_ARCHIVE_ROOT.tar.gz for this guest." >&2
   exit 1
 fi
 
@@ -29,7 +33,6 @@ echo "\n\n###\n### Install the pinned GitHub CLI\n###\n"
 
 GITHUB_CLI_TEMP_DIRECTORY="$(mktemp --directory)"
 GITHUB_CLI_ARCHIVE="$GITHUB_CLI_TEMP_DIRECTORY/gh.tar.gz"
-GITHUB_CLI_ARCHIVE_ROOT="gh_${GITHUB_CLI_VERSION}_linux_arm64"
 trap 'rm -rf "$GITHUB_CLI_TEMP_DIRECTORY"' EXIT
 
 # GitHub release assets are served through redirects. Restrict the original and

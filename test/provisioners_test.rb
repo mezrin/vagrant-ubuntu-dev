@@ -293,6 +293,12 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     assert_includes github_cli, "/usr/local/bin/gh --version"
     assert_includes github_cli, "/usr/local/bin/gh help"
 
+    # Archive layouts are derived from the configured URL, so the same scripts
+    # serve the ARM64 Vagrant guest and x86_64 servers.
+    refute_includes github_cli, "_linux_arm64"
+    refute_includes uv, "aarch64"
+    refute_includes provision_source("nodejs.sh"), "linux-arm64"
+
     integration = File.read(GUEST_INTEGRATION_SCRIPT)
     assert_includes integration,
                     "for (field_index = 1; field_index <= NF; field_index++)"

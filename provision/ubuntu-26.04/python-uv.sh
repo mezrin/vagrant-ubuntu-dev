@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 # Purpose: install verified uv and uvx binaries system-wide for later user-level
 # Python provisioning. Runs as root.
-# Inputs: exact uv version plus ARM64 archive URL and SHA-256 digest.
+# Inputs: exact uv version plus an archive URL for the guest's architecture and
+# its SHA-256 digest.
 # Repeat behavior: verified binaries replace the same /usr/local/bin paths.
 
 # Require all release metadata before downloading or replacing system binaries.
@@ -17,6 +18,9 @@ echo "\n\n###\n### Install the pinned uv binary\n###\n"
 # The trap removes partial data if download, verification, or extraction fails.
 UV_TEMP_DIRECTORY="$(mktemp -d)"
 UV_ARCHIVE="$UV_TEMP_DIRECTORY/uv.tar.gz"
+# Release archives such as uv-x86_64-unknown-linux-gnu.tar.gz contain one
+# directory with the same name, so the URL selects both target and layout.
+UV_ARCHIVE_ROOT="$(basename "$UV_ARCHIVE_URL" .tar.gz)"
 trap 'rm -rf "$UV_TEMP_DIRECTORY"' EXIT
 
 curl --proto '=https' --tlsv1.2 -fsSL "$UV_ARCHIVE_URL" -o "$UV_ARCHIVE"
@@ -25,10 +29,10 @@ tar --extract --gzip --file "$UV_ARCHIVE" --directory "$UV_TEMP_DIRECTORY"
 
 # Install only the two expected executables, not arbitrary archive contents.
 install -m 0755 \
-  "$UV_TEMP_DIRECTORY/uv-aarch64-unknown-linux-gnu/uv" \
+  "$UV_TEMP_DIRECTORY/$UV_ARCHIVE_ROOT/uv" \
   /usr/local/bin/uv
 install -m 0755 \
-  "$UV_TEMP_DIRECTORY/uv-aarch64-unknown-linux-gnu/uvx" \
+  "$UV_TEMP_DIRECTORY/$UV_ARCHIVE_ROOT/uvx" \
   /usr/local/bin/uvx
 
 rm -rf "$UV_TEMP_DIRECTORY"
