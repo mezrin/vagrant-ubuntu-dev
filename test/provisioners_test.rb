@@ -90,6 +90,43 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     end
   end
 
+  # Server scripts follow the same executable, strict-mode, and formatting rules
+  # as the Vagrant provisioners.
+  def test_server_scripts_are_executable_valid_bash
+    server_scripts = Dir.glob(File.join(VAGRANT_DIRECTORY, "server", "**", "*.sh"))
+    refute_empty server_scripts
+    server_scripts.each do |script|
+      source = File.read(script)
+      assert File.executable?(script), "#{script} is not executable"
+      assert_equal "#!/usr/bin/env bash\n", source.lines.first
+      assert_includes source.lines.first(5), "set -Eeuo pipefail\n"
+      _stdout, stderr, status = Open3.capture3("bash", "-n", script)
+      assert status.success?, "#{script}: #{stderr}"
+      refute_includes source, "\r", "#{script} contains CRLF"
+      source.lines.each_with_index do |line, index|
+        refute_match(/[ \t]+\n\z/, line, "#{script}:#{index + 1} has trailing whitespace")
+      end
+    end
+  end
+
+  # A public server must never lose SSH while UFW is active, and passwords may
+  # be disabled only when the development user already has a key.
+  def test_server_network_safety_invariants
+    firewall = File.read(File.join(VAGRANT_DIRECTORY, "server", "provision", "firewall.sh"))
+    assert_includes firewall, "sshd -T"
+    assert_includes firewall, "ufw default deny incoming"
+    assert_operator firewall.index("comment 'Server managed: SSH'"), :<,
+                    firewall.index("ufw --force delete")
+    assert_operator firewall.index("ufw --force delete"), :<,
+                    firewall.index("ufw --force enable")
+
+    ssh = File.read(File.join(VAGRANT_DIRECTORY, "server", "provision", "ssh-hardening.sh"))
+    assert_operator ssh.index("authorized_keys"), :<, ssh.index("PasswordAuthentication no")
+    assert_includes ssh, "sshd -t"
+    assert_includes ssh, "systemctl reload ssh"
+    refute_includes ssh, "systemctl restart ssh"
+  end
+
   # This is behavioral rather than source matching: exercise both option forms,
   # generic provisioner-type selection, lifecycle commands, and disabled MongoDB.
   def test_mongodb_secret_command_policy
