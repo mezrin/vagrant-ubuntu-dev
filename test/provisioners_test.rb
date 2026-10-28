@@ -127,6 +127,29 @@ class Ubuntu2604ProvisionersTest < Minitest::Test
     refute_includes ssh, "systemctl restart ssh"
   end
 
+  # The server runner must reference existing scripts, skip the Parallels-only
+  # provisioners, and keep the MongoDB password out of process arguments.
+  def test_server_runner_steps
+    setup = File.read(File.join(VAGRANT_DIRECTORY, "server", "setup.sh"))
+    steps = setup.scan(/^  "([a-z-]+)\|(root|user)\|\$(PROVISION_DIRECTORY|SERVER_PROVISION_DIRECTORY)\/([a-z-]+\.sh)\|/)
+    refute_empty steps
+    steps.each do |_name, _privilege, directory, script|
+      base = directory == "PROVISION_DIRECTORY" ? PROVISION_DIRECTORY : File.join(VAGRANT_DIRECTORY, "server", "provision")
+      assert File.exist?(File.join(base, script)), "setup.sh references missing #{script}"
+    end
+    used = steps.map { |step| step[3] }
+    %w[network-security.sh network-link-recovery.sh enlarge-hdd.sh ubuntu-desktop.sh].each do |script|
+      refute_includes used, script
+    end
+    assert_includes setup, '<<< "$MONGODB_PASSWORD"'
+    refute_match(/environment\+=\("MONGODB_PASSWORD=/, setup)
+
+    server_env = File.read(File.join(VAGRANT_DIRECTORY, "server", "server.env"))
+    assert_includes server_env, 'DOCKER_INGRESS_POLICY="public-server"'
+    assert_includes server_env, 'PRIVATE_NETWORK_IP="127.0.0.1"'
+    refute_match(/aarch64|arm64/, server_env)
+  end
+
   # This is behavioral rather than source matching: exercise both option forms,
   # generic provisioner-type selection, lifecycle commands, and disabled MongoDB.
   def test_mongodb_secret_command_policy
