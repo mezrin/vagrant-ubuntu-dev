@@ -9,6 +9,10 @@ environment. It installs a graphical Ubuntu desktop, common build tools,
 GitHub CLI, Docker, Rust, Python, Node.js, PostgreSQL, MongoDB, Nginx, and
 Certbot.
 
+To set up an x86_64 Ubuntu 26.04 server the same way without Vagrant, see
+[server/README.md](server/README.md). It reuses these provisioners with
+x86_64 pins, a public-server firewall, and key-only SSH.
+
 ## What the template creates
 
 | Area | Result |
